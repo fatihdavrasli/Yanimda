@@ -56,12 +56,9 @@ const ROOM_CHANNELS = [
 
 const QUICK_REACTIONS = ["🔥", "👏", "❤️", "😂", "⚡"];
 
-const COMMUNITY_SEED_USERS = [
-  { id: "seed_selin", name: "Selin", city: "İstanbul", status: "sohbet", room: "turkiye", isSeed: true },
-  { id: "seed_mert", name: "Mert", city: "Körfez", status: "musait", room: "genel", isSeed: true },
-  { id: "seed_zeynep", name: "Zeynep", city: "İzmir", status: "destek", room: "turkiye", isSeed: true },
-  { id: "seed_alex", name: "Alex", city: "Berlin", status: "sohbet", room: "global", isSeed: true },
-];
+function buildDmThreadKey(uidA, uidB) {
+  return [String(uidA || ""), String(uidB || "")].sort().join("__");
+}
 
 function isReservedFdName(rawName) {
   return String(rawName || "").trim().toLocaleUpperCase("tr") === "FD";
@@ -197,19 +194,12 @@ export default function App() {
   });
   const [chatInput, setChatInput] = useState("");
   const [dmPeer, setDmPeer] = useState(null);
-  const [dmThreads, setDmThreads] = useState(() => {
-    if (typeof window === "undefined") return {};
-    try {
-      const raw = window.localStorage.getItem(`${STORAGE_PREFIX}dms`);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  });
+  const [dmMessages, setDmMessages] = useState([]);
   const [dmInput, setDmInput] = useState("");
 
   const dbRef = useRef(null);
   const chatBottomRef = useRef(null);
+  const dmBottomRef = useRef(null);
 
   const typingFdName = isReservedFdName(nickname);
   const isFdAdmin = entered && isReservedFdName(nickname) && isFdAuthenticated;
@@ -233,11 +223,6 @@ export default function App() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(`${STORAGE_PREFIX}chat`, JSON.stringify(chatMessages.slice(-120)));
   }, [chatMessages]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(`${STORAGE_PREFIX}dms`, JSON.stringify(dmThreads));
-  }, [dmThreads]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -349,30 +334,52 @@ export default function App() {
   }, [entered, nickname, cityTag, statusTag, activeRoom, isFdAdmin, myId]);
 
   useEffect(() => {
+    if (!entered || !dmPeer || !dmPeer.id) {
+      setDmMessages([]);
+      return;
+    }
+    if (!dbRef.current) return;
+    const threadKey = buildDmThreadKey(myId, dmPeer.id);
+    const threadRef = ref(dbRef.current, `${DB_ROOT}/dms/${threadKey}`);
+    return onValue(threadRef, (snap) => {
+      const val = snap.val() || {};
+      const arr = Object.entries(val)
+        .map(([id, item]) => ({ id, ...item }))
+        .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      setDmMessages(arr.slice(-100));
+    });
+  }, [entered, dmPeer, myId]);
+
+  useEffect(() => {
     if (activeTab === "chat" && chatBottomRef.current) {
       chatBottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [chatMessages, activeRoom, activeTab]);
+
+  useEffect(() => {
+    if (dmPeer && dmBottomRef.current) {
+      dmBottomRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [dmMessages, dmPeer]);
 
   const currentStatusMeta = useMemo(
     () => STATUS_TAGS.find((s) => s.id === statusTag) || STATUS_TAGS[0],
     [statusTag]
   );
 
-  const combinedDirectory = useMemo(() => {
+  const realOnlineDirectory = useMemo(() => {
     const map = new Map();
-    COMMUNITY_SEED_USERS.forEach((u) => map.set(u.id, u));
     onlineUsers.forEach((u) => {
-      if (u && u.id && !bannedUsers[u.id]) {
-        map.set(u.id, { ...u, isOnlineLive: true });
+      if (u && u.id && u.id !== myId && !bannedUsers[u.id]) {
+        map.set(u.id, u);
       }
     });
     return Array.from(map.values());
-  }, [onlineUsers, bannedUsers]);
+  }, [onlineUsers, myId, bannedUsers]);
 
   const filteredDirectory = useMemo(() => {
     const q = peopleQuery.trim().toLocaleLowerCase("tr");
-    return combinedDirectory.filter((u) => {
+    return realOnlineDirectory.filter((u) => {
       const matchesStatus = statusFilter === "all" || u.status === statusFilter;
       if (!matchesStatus) return false;
       if (!q) return true;
@@ -381,7 +388,7 @@ export default function App() {
         String(u.city || "").toLocaleLowerCase("tr").includes(q)
       );
     });
-  }, [combinedDirectory, peopleQuery, statusFilter]);
+  }, [realOnlineDirectory, peopleQuery, statusFilter]);
 
   const roomMessages = useMemo(() => {
     return chatMessages.filter((m) => (m.room || "genel") === activeRoom);
@@ -615,41 +622,37 @@ export default function App() {
   }
 
   function handleQuickMatch() {
-    const candidates = combinedDirectory.filter((u) => u.id !== myId);
-    if (candidates.length === 0) return;
-    const picked = candidates[Math.floor(Math.random() * candidates.length)];
+    if (realOnlineDirectory.length === 0) {
+      triggerPulse("Çevrimiçi Kişi Yok", "Şu an eşleşebileceğin başka aktif kullanıcı görünmüyor.");
+      return;
+    }
+    const picked = realOnlineDirectory[Math.floor(Math.random() * realOnlineDirectory.length)];
     setDmPeer(picked);
     triggerPulse("Hızlı Eşleşme", `${picked.name} (${picked.city || "Genel"}) ile özel sohbet açıldı.`);
   }
 
   function handleSendDm(e) {
     e.preventDefault();
-    if (!dmPeer || !dmInput.trim()) return;
+    if (!dmPeer || !dmPeer.id || !dmInput.trim()) return;
     const clean = dmInput.trim();
     setDmInput("");
     const outgoing = {
-      id: "dm_" + Date.now(),
-      fromMe: true,
+      senderId: myId,
+      senderName: isFdAdmin ? "FD" : nickname.trim(),
+      recipientId: dmPeer.id,
       text: clean,
       ts: Date.now(),
     };
-    setDmThreads((prev) => {
-      const list = Array.isArray(prev[dmPeer.id]) ? prev[dmPeer.id] : [];
-      return { ...prev, [dmPeer.id]: [...list.slice(-60), outgoing] };
-    });
 
-    setTimeout(() => {
-      const reply = {
-        id: "dm_r_" + Date.now(),
-        fromMe: false,
-        text: `Selam ${isFdAdmin ? "FD" : nickname.trim() || "dostum"}, "${clean}" mesajını aldım! Nasıl gidiyor?`,
-        ts: Date.now(),
-      };
-      setDmThreads((prev) => {
-        const list = Array.isArray(prev[dmPeer.id]) ? prev[dmPeer.id] : [];
-        return { ...prev, [dmPeer.id]: [...list.slice(-60), reply] };
-      });
-    }, 650);
+    if (dbRef.current) {
+      const threadKey = buildDmThreadKey(myId, dmPeer.id);
+      push(ref(dbRef.current, `${DB_ROOT}/dms/${threadKey}`), outgoing);
+    } else {
+      setDmMessages((prev) => [
+        ...prev.slice(-99),
+        { id: "dm_" + Date.now(), ...outgoing },
+      ]);
+    }
   }
 
   if (!entered) {
@@ -775,10 +778,7 @@ export default function App() {
         </div>
       </div>
     );
-  }
-  const activeDmMessages = dmPeer ? dmThreads[dmPeer.id] || [] : [];
-
-  return (
+  }  return (
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-12">
       <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-3">
         <div className="max-w-md mx-auto flex items-center justify-between gap-2">
@@ -802,7 +802,7 @@ export default function App() {
               </div>
               <p className="text-[11px] text-slate-400 truncate flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                {isFdAdmin ? "FD (Sınırsız Yetki)" : nickname.trim()} • {cityTag.trim() || "Genel"} • {combinedDirectory.length + 1} aktif
+                {isFdAdmin ? "FD (Sınırsız Yetki)" : nickname.trim()} • {cityTag.trim() || "Genel"} • {realOnlineDirectory.length + 1} aktif
               </p>
             </div>
           </div>
@@ -1195,7 +1195,7 @@ export default function App() {
 
             {filteredDirectory.length === 0 ? (
               <p className="text-xs text-slate-400 text-center py-6">
-                Filtreye uygun kişi bulunamadı.
+                Şu an aktif başka gerçek kullanıcı yok. İkinci bir sekme veya cihazdan giriş yaptığında burada görünür.
               </p>
             ) : (
               filteredDirectory.map((u) => (
@@ -1217,20 +1217,18 @@ export default function App() {
                     >
                       Mesaj
                     </button>
-                    {!u.isSeed && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setReportTargetUser(u);
-                          setReportReason("");
-                        }}
-                        className="p-1.5 rounded-xl bg-slate-800 hover:bg-amber-950/70 text-amber-300"
-                        title="Şikayet Et"
-                      >
-                        <Flag className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                    {isFdAdmin && !u.isSeed && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReportTargetUser(u);
+                        setReportReason("");
+                      }}
+                      className="p-1.5 rounded-xl bg-slate-800 hover:bg-amber-950/70 text-amber-300"
+                      title="Şikayet Et"
+                    >
+                      <Flag className="w-3.5 h-3.5" />
+                    </button>
+                    {isFdAdmin && (
                       <button
                         type="button"
                         onClick={() => handleBanUser(u)}
@@ -1430,28 +1428,32 @@ export default function App() {
             </div>
 
             <div className="h-60 overflow-y-auto space-y-2 pr-1">
-              {activeDmMessages.length === 0 ? (
+              {dmMessages.length === 0 ? (
                 <p className="text-xs text-slate-500 text-center py-10">
                   {dmPeer.name} ile özel sohbeti başlatmak için ilk mesajı yaz.
                 </p>
               ) : (
-                activeDmMessages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`flex flex-col ${m.fromMe ? "items-end" : "items-start"}`}
-                  >
+                dmMessages.map((m) => {
+                  const mine = m.senderId === myId;
+                  return (
                     <div
-                      className={`px-3 py-2 rounded-2xl text-xs max-w-[82%] ${
-                        m.fromMe
-                          ? "bg-emerald-500 text-slate-950 font-semibold rounded-br-sm"
-                          : "bg-slate-800 text-slate-100 rounded-bl-sm"
-                      }`}
+                      key={m.id}
+                      className={`flex flex-col ${mine ? "items-end" : "items-start"}`}
                     >
-                      {m.text}
+                      <div
+                        className={`px-3 py-2 rounded-2xl text-xs max-w-[82%] ${
+                          mine
+                            ? "bg-emerald-500 text-slate-950 font-semibold rounded-br-sm"
+                            : "bg-slate-800 text-slate-100 rounded-bl-sm"
+                        }`}
+                      >
+                        {m.text}
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
+              <div ref={dmBottomRef} />
             </div>
 
             <form onSubmit={handleSendDm} className="flex items-center gap-2">
@@ -1475,3 +1477,4 @@ export default function App() {
     </div>
   );
 }
+
