@@ -8,28 +8,25 @@ import {
   onValue,
   onDisconnect,
   remove,
-  update,
 } from "firebase/database";
 import {
   HeartHandshake,
+  Shuffle,
   Users,
   MessageCircle,
   Send,
-  Sparkles,
-  LogOut,
-  CheckCircle2,
-  MapPin,
-  Trash2,
-  Flame,
-  Radio,
-  Search,
-  Shuffle,
-  Bell,
   X,
+  Trash2,
   Shield,
   Lock,
   Ban,
   Flag,
+  LogOut,
+  Trophy,
+  Landmark,
+  Newspaper,
+  Coffee,
+  Gamepad2,
 } from "lucide-react";
 
 const FIREBASE_CONFIG =
@@ -40,21 +37,24 @@ const FIREBASE_CONFIG =
 const STORAGE_PREFIX = "yanimda_";
 const DB_ROOT = "yanimda";
 
-const STATUS_TAGS = [
-  { id: "musait", label: "Yanındayım", badge: "Müsait", dot: "bg-emerald-400" },
-  { id: "sohbet", label: "Sohbete Açık", badge: "Sohbet", dot: "bg-sky-400" },
-  { id: "destek", label: "Yardım / İstek", badge: "Destek", dot: "bg-amber-400" },
-  { id: "mesgul", label: "Kısa Mola", badge: "Mola", dot: "bg-rose-400" },
+const SIMPLE_ROOMS = [
+  { id: "futbol", title: "Futbol", icon: "trophy", badge: "Maç & Lig" },
+  { id: "siyaset", title: "Siyaset", icon: "landmark", badge: "Tartışma" },
+  { id: "gundem", title: "Gündem", icon: "newspaper", badge: "Canlı" },
+  { id: "sohbet", title: "Sohbet", icon: "coffee", badge: "Serbest" },
+  { id: "oyun", title: "Oyun", icon: "gamepad", badge: "Eğlence" },
 ];
 
-const ROOM_CHANNELS = [
-  { id: "genel", title: "Genel Meydan", tag: "Canlı", desc: "Türkiye & Dünya ortak sohbeti" },
-  { id: "turkiye", title: "Türkiye Nabzı", tag: "TR", desc: "Gündem, şehirler ve sıcak muhabbet" },
-  { id: "global", title: "Global Lounge", tag: "World", desc: "Uluslararası tanışma & sohbet" },
-  { id: "gece_kusu", title: "Gece Kuşları", tag: "24/7", desc: "Uykusuzlar ve akşam sohbeti" },
+const RANDOM_NICKS = [
+  "Meraklı Kurt",
+  "Sessiz Dalga",
+  "Gece Yolcusu",
+  "Hızlı Bakış",
+  "Kuzey Rüzgarı",
+  "Bilinmeyen Yıldız",
+  "Derin Nefes",
+  "Sakin Liman",
 ];
-
-const QUICK_REACTIONS = ["🔥", "👏", "❤️", "😂", "⚡"];
 
 function buildDmThreadKey(uidA, uidB) {
   return [String(uidA || ""), String(uidB || "")].sort().join("__");
@@ -78,32 +78,18 @@ function hashSecret(secret) {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
 }
 
-function formatTime(ts) {
-  const n = Number(ts || 0);
-  if (!n) return "Az önce";
-  const diffSec = Math.max(0, Math.floor((Date.now() - n) / 1000));
-  if (diffSec < 60) return "Az önce";
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} dk önce`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr} sa önce`;
-  return `${Math.floor(diffHr / 24)} gün önce`;
+function RoomIcon({ name, className = "w-4 h-4" }) {
+  if (name === "trophy") return <Trophy className={className} />;
+  if (name === "landmark") return <Landmark className={className} />;
+  if (name === "newspaper") return <Newspaper className={className} />;
+  if (name === "gamepad") return <Gamepad2 className={className} />;
+  return <Coffee className={className} />;
 }
 
 export default function App() {
   const [nickname, setNickname] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return window.localStorage.getItem(`${STORAGE_PREFIX}nickname`) || "";
-  });
-
-  const [cityTag, setCityTag] = useState(() => {
-    if (typeof window === "undefined") return "Körfez";
-    return window.localStorage.getItem(`${STORAGE_PREFIX}city`) || "Körfez";
-  });
-
-  const [statusTag, setStatusTag] = useState(() => {
-    if (typeof window === "undefined") return "musait";
-    return window.localStorage.getItem(`${STORAGE_PREFIX}status`) || "musait";
+    if (typeof window === "undefined") return "Meraklı Kurt";
+    return window.localStorage.getItem(`${STORAGE_PREFIX}nickname`) || "Meraklı Kurt";
   });
 
   const [fdPasswordInput, setFdPasswordInput] = useState("");
@@ -143,11 +129,9 @@ export default function App() {
   });
 
   const [loginError, setLoginError] = useState("");
-  const [activeTab, setActiveTab] = useState("feed");
-  const [activeRoom, setActiveRoom] = useState("genel");
-  const [peopleQuery, setPeopleQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [pulseBanner, setPulseBanner] = useState(null);
+  const [activeRoom, setActiveRoom] = useState("futbol");
+  const [viewMode, setViewMode] = useState("room");
+  const [statusNotice, setStatusNotice] = useState("");
 
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [bannedUsers, setBannedUsers] = useState(() => {
@@ -171,18 +155,6 @@ export default function App() {
   const [reportTargetUser, setReportTargetUser] = useState(null);
   const [reportReason, setReportReason] = useState("");
 
-  const [posts, setPosts] = useState(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = window.localStorage.getItem(`${STORAGE_PREFIX}posts`);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [postText, setPostText] = useState("");
-  const [postCategory, setPostCategory] = useState("Genel");
   const [chatMessages, setChatMessages] = useState(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -193,6 +165,7 @@ export default function App() {
     }
   });
   const [chatInput, setChatInput] = useState("");
+
   const [dmPeer, setDmPeer] = useState(null);
   const [dmMessages, setDmMessages] = useState([]);
   const [dmInput, setDmInput] = useState("");
@@ -208,20 +181,13 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(`${STORAGE_PREFIX}nickname`, nickname);
-    window.localStorage.setItem(`${STORAGE_PREFIX}city`, cityTag);
-    window.localStorage.setItem(`${STORAGE_PREFIX}status`, statusTag);
     window.localStorage.setItem(`${STORAGE_PREFIX}entered`, entered ? "1" : "0");
     window.localStorage.setItem(`${STORAGE_PREFIX}fd_authed`, isFdAuthenticated ? "1" : "0");
-  }, [nickname, cityTag, statusTag, entered, isFdAuthenticated]);
+  }, [nickname, entered, isFdAuthenticated]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(`${STORAGE_PREFIX}posts`, JSON.stringify(posts.slice(-80)));
-  }, [posts]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(`${STORAGE_PREFIX}chat`, JSON.stringify(chatMessages.slice(-120)));
+    window.localStorage.setItem(`${STORAGE_PREFIX}chat`, JSON.stringify(chatMessages.slice(-150)));
   }, [chatMessages]);
 
   useEffect(() => {
@@ -259,14 +225,21 @@ export default function App() {
     const unsubBans = onValue(ref(dbRef.current, `${DB_ROOT}/banned_users`), (snap) => {
       const val = snap.val() || {};
       setBannedUsers(val);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(`${STORAGE_PREFIX}banned_users`, JSON.stringify(val));
+      }
     });
 
     const unsubReports = onValue(ref(dbRef.current, `${DB_ROOT}/reports`), (snap) => {
       const val = snap.val() || {};
       const arr = Object.entries(val)
-        .map(([id, item]) => ({ id, ...item }))
-        .sort((a, b) => (b.ts || 0) - (a.ts || 0));
-      setReportsList(arr.slice(0, 80));
+        .map(([fbKey, item]) => ({ id: item?.id || fbKey, fbKey, ...item }))
+        .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+        .slice(0, 80);
+      setReportsList(arr);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(`${STORAGE_PREFIX}reports`, JSON.stringify(arr));
+      }
     });
 
     return () => {
@@ -296,8 +269,6 @@ export default function App() {
       set(userRef, {
         id: myId,
         name: cleanName,
-        city: cityTag.trim() || "Genel",
-        status: statusTag,
         room: activeRoom,
         isAdmin: isFdAdmin,
         updatedAt: Date.now(),
@@ -306,32 +277,27 @@ export default function App() {
 
       const unsubUsers = onValue(ref(dbRef.current, `${DB_ROOT}/users`), (snap) => {
         const val = snap.val() || {};
-        setOnlineUsers(Object.values(val).filter((u) => u && u.id !== myId));
-      });
-
-      const unsubPosts = onValue(ref(dbRef.current, `${DB_ROOT}/posts`), (snap) => {
-        const val = snap.val() || {};
-        const arr = Object.entries(val)
-          .map(([id, item]) => ({ id, ...item }))
-          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-        setPosts(arr.slice(0, 80));
+        setOnlineUsers(Object.values(val).filter((u) => u && u.id));
       });
 
       const unsubChat = onValue(ref(dbRef.current, `${DB_ROOT}/chat`), (snap) => {
         const val = snap.val() || {};
         const arr = Object.entries(val)
-          .map(([id, item]) => ({ id, ...item }))
-          .sort((a, b) => (a.ts || 0) - (b.ts || 0));
-        setChatMessages(arr.slice(-120));
+          .map(([fbKey, item]) => ({ id: item?.id || fbKey, fbKey, ...item }))
+          .sort((a, b) => (a.ts || 0) - (b.ts || 0))
+          .slice(-150);
+        setChatMessages(arr);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(`${STORAGE_PREFIX}chat`, JSON.stringify(arr));
+        }
       });
 
       return () => {
         unsubUsers();
-        unsubPosts();
         unsubChat();
       };
     }
-  }, [entered, nickname, cityTag, statusTag, activeRoom, isFdAdmin, myId]);
+  }, [entered, nickname, activeRoom, isFdAdmin, myId]);
 
   useEffect(() => {
     if (!entered || !dmPeer || !dmPeer.id) {
@@ -344,17 +310,17 @@ export default function App() {
     return onValue(threadRef, (snap) => {
       const val = snap.val() || {};
       const arr = Object.entries(val)
-        .map(([id, item]) => ({ id, ...item }))
+        .map(([fbKey, item]) => ({ id: item?.id || fbKey, fbKey, ...item }))
         .sort((a, b) => (a.ts || 0) - (b.ts || 0));
       setDmMessages(arr.slice(-100));
     });
   }, [entered, dmPeer, myId]);
 
   useEffect(() => {
-    if (activeTab === "chat" && chatBottomRef.current) {
+    if (viewMode === "room" && chatBottomRef.current) {
       chatBottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [chatMessages, activeRoom, activeTab]);
+  }, [chatMessages, activeRoom, viewMode]);
 
   useEffect(() => {
     if (dmPeer && dmBottomRef.current) {
@@ -362,73 +328,70 @@ export default function App() {
     }
   }, [dmMessages, dmPeer]);
 
-  const currentStatusMeta = useMemo(
-    () => STATUS_TAGS.find((s) => s.id === statusTag) || STATUS_TAGS[0],
-    [statusTag]
-  );
-
-  const realOnlineDirectory = useMemo(() => {
+  const activeRealUsers = useMemo(() => {
     const map = new Map();
     onlineUsers.forEach((u) => {
-      if (u && u.id && u.id !== myId && !bannedUsers[u.id]) {
+      if (u && u.id && !bannedUsers[u.id]) {
         map.set(u.id, u);
       }
     });
+    if (entered && !isMyBanned) {
+      map.set(myId, {
+        id: myId,
+        name: isFdAdmin ? "FD" : nickname.trim() || "Misafir",
+        room: activeRoom,
+        isAdmin: isFdAdmin,
+      });
+    }
     return Array.from(map.values());
-  }, [onlineUsers, myId, bannedUsers]);
+  }, [onlineUsers, bannedUsers, entered, isMyBanned, myId, isFdAdmin, nickname, activeRoom]);
 
-  const filteredDirectory = useMemo(() => {
-    const q = peopleQuery.trim().toLocaleLowerCase("tr");
-    return realOnlineDirectory.filter((u) => {
-      const matchesStatus = statusFilter === "all" || u.status === statusFilter;
-      if (!matchesStatus) return false;
-      if (!q) return true;
-      return (
-        String(u.name || "").toLocaleLowerCase("tr").includes(q) ||
-        String(u.city || "").toLocaleLowerCase("tr").includes(q)
-      );
-    });
-  }, [realOnlineDirectory, peopleQuery, statusFilter]);
+  const otherRealUsers = useMemo(() => {
+    return activeRealUsers.filter((u) => u.id !== myId);
+  }, [activeRealUsers, myId]);
 
-  const roomMessages = useMemo(() => {
-    return chatMessages.filter((m) => (m.room || "genel") === activeRoom);
+  const realOnlineCount = activeRealUsers.length;
+
+  const currentRoomObj = useMemo(
+    () => SIMPLE_ROOMS.find((r) => r.id === activeRoom) || SIMPLE_ROOMS[0],
+    [activeRoom]
+  );
+
+  const currentRoomMessages = useMemo(() => {
+    return chatMessages.filter((m) => (m.room || "futbol") === activeRoom);
   }, [chatMessages, activeRoom]);
 
-  function triggerPulse(title, body) {
-    setPulseBanner({ title, body, id: Date.now() });
+  function handleRandomNick() {
+    if (isReservedFdName(nickname)) return;
+    const candidates = RANDOM_NICKS.filter((n) => n !== nickname.trim());
+    const picked = candidates[Math.floor(Math.random() * candidates.length)] || RANDOM_NICKS[0];
+    setNickname(picked);
   }
 
   function handleEnter(e) {
     if (e) e.preventDefault();
     const trimmed = nickname.trim();
     if (!trimmed) {
-      setLoginError("Lütfen görünür bir ad veya takma ad gir.");
+      setLoginError("Lütfen bir takma ad gir.");
       return;
     }
-
     if (isMyBanned && !isReservedFdName(trimmed)) {
       setLoginError("Bu hesap yönetici tarafından engellenmiştir.");
       return;
     }
-
     if (isReservedFdName(trimmed)) {
       const pass = fdPasswordInput.trim();
       if (pass.length < 4) {
-        setLoginError("FD hesabı için en az 4 karakterli parola girin.");
+        setLoginError("FD hesabı için en az 4 karakterli parola gir.");
         return;
       }
       const incomingHash = hashSecret(pass);
-
       if (!storedFdAuth || !storedFdAuth.passwordHash) {
         if (fdPasswordConfirm.trim() !== pass) {
           setLoginError("FD parola tekrarı eşleşmiyor.");
           return;
         }
-        const authRecord = {
-          passwordHash: incomingHash,
-          ownerId: myId,
-          createdAt: Date.now(),
-        };
+        const authRecord = { passwordHash: incomingHash, ownerId: myId, createdAt: Date.now() };
         setStoredFdAuth(authRecord);
         if (typeof window !== "undefined") {
           window.localStorage.setItem(`${STORAGE_PREFIX}fd_auth`, JSON.stringify(authRecord));
@@ -440,28 +403,25 @@ export default function App() {
         setIsFdAuthenticated(true);
         setLoginError("");
         setEntered(true);
-        triggerPulse("FD Sınırsız Yetki Aktif", "Yönetici parolan oluşturuldu ve tam yetkiyle giriş yapıldı.");
+        setStatusNotice("FD sınırsız yetki aktif.");
         return;
       }
-
       if (incomingHash !== storedFdAuth.passwordHash) {
-        setLoginError("FD kullanıcı adı korumalıdır. Girdiğiniz parola hatalı!");
+        setLoginError("FD kullanıcı adı korumalıdır. Parola hatalı.");
         return;
       }
-
       setNickname("FD");
       setIsFdAuthenticated(true);
       setLoginError("");
       setEntered(true);
-      triggerPulse("FD Sınırsız Yetki Aktif", "Yönetici girişi doğrulandı.");
+      setStatusNotice("FD sınırsız yetki aktif.");
       return;
     }
-
     setIsFdAuthenticated(false);
     setNickname(trimmed);
     setLoginError("");
     setEntered(true);
-    triggerPulse("Yanimda Canlı", `${trimmed} olarak ${cityTag.trim() || "Genel"} odasına katıldın.`);
+    setStatusNotice("");
   }
 
   function handleLogout() {
@@ -472,111 +432,117 @@ export default function App() {
     setEntered(false);
   }
 
-  function handleCreatePost(e) {
-    e.preventDefault();
-    const clean = postText.trim();
-    if (!clean) return;
-    const displayName = isFdAdmin ? "FD" : nickname.trim();
-    const item = {
-      id: "p_" + Date.now() + "_" + Math.random().toString(36).slice(2, 5),
-      authorId: myId,
-      authorName: displayName,
-      isAdminPost: isFdAdmin,
-      city: cityTag.trim() || "Genel",
-      statusLabel: currentStatusMeta.label,
-      category: postCategory,
-      text: clean,
-      cheers: 0,
-      createdAt: Date.now(),
-    };
-    setPostText("");
-    if (dbRef.current) {
-      push(ref(dbRef.current, `${DB_ROOT}/posts`), item);
-    } else {
-      setPosts((prev) => [item, ...prev.slice(0, 79)]);
-    }
-    triggerPulse("Akışta Paylaşıldı", `${postCategory} kanalında yeni bir gönderin yayında.`);
-  }
-
-  function handleCheerPost(postId) {
-    if (dbRef.current) {
-      const target = posts.find((p) => p.id === postId);
-      if (target) {
-        update(ref(dbRef.current, `${DB_ROOT}/posts/${postId}`), {
-          cheers: (target.cheers || 0) + 1,
-        });
-      }
+  function handleQuickMatch() {
+    if (otherRealUsers.length === 0) {
+      setStatusNotice("Şu an eşleşebileceğin başka çevrimiçi kişi yok.");
       return;
     }
-    setPosts((prev) =>
-      prev.map((p) => (p.id === postId ? { ...p, cheers: (p.cheers || 0) + 1 } : p))
-    );
+    const picked = otherRealUsers[Math.floor(Math.random() * otherRealUsers.length)];
+    setDmPeer(picked);
+    setStatusNotice(`${picked.name} ile özel sohbet açıldı.`);
   }
 
-  function handleDeletePost(postId) {
+  function handleSendRoomMessage(e) {
+    e.preventDefault();
+    const clean = chatInput.trim();
+    if (!clean) return;
+    setChatInput("");
+    const msg = {
+      id: "m_" + Date.now() + "_" + Math.random().toString(36).slice(2, 5),
+      room: activeRoom,
+      senderId: myId,
+      senderName: isFdAdmin ? "FD" : nickname.trim(),
+      isAdminMsg: isFdAdmin,
+      text: clean,
+      ts: Date.now(),
+    };
     if (dbRef.current) {
-      remove(ref(dbRef.current, `${DB_ROOT}/posts/${postId}`));
-    }
-    setPosts((prev) => prev.filter((p) => p.id !== postId));
-    if (isFdAdmin) {
-      triggerPulse("FD Moderasyon", "Ortak akıştaki paylaşım silindi.");
+      push(ref(dbRef.current, `${DB_ROOT}/chat`), msg);
+    } else {
+      setChatMessages((prev) => {
+        const next = [...prev.slice(-149), msg];
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(`${STORAGE_PREFIX}chat`, JSON.stringify(next));
+        }
+        return next;
+      });
     }
   }
 
-  function handleDeleteChatMessage(msgId) {
-    if (!isFdAdmin || !msgId) return;
-    if (dbRef.current) {
-      remove(ref(dbRef.current, `${DB_ROOT}/chat/${msgId}`));
+  function handleDeleteRoomMessage(msg) {
+    if (!isFdAdmin || !msg) return;
+    const next = chatMessages.filter((m) => m.id !== msg.id && m.fbKey !== msg.fbKey);
+    setChatMessages(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(`${STORAGE_PREFIX}chat`, JSON.stringify(next));
     }
-    setChatMessages((prev) => prev.filter((m) => m.id !== msgId));
-    triggerPulse("FD Moderasyon", "Sohbet odasındaki mesaj silindi.");
+    if (dbRef.current) {
+      const keyToDelete = msg.fbKey || msg.id;
+      if (keyToDelete) remove(ref(dbRef.current, `${DB_ROOT}/chat/${keyToDelete}`));
+    }
+    setStatusNotice("Mesaj silindi.");
+  }
+
+  function handleDismissReport(rep) {
+    if (!rep) return;
+    const next = reportsList.filter((x) => x.id !== rep.id && x.fbKey !== rep.fbKey);
+    setReportsList(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(`${STORAGE_PREFIX}reports`, JSON.stringify(next));
+    }
+    if (dbRef.current) {
+      const keyToDelete = rep.fbKey || rep.id;
+      if (keyToDelete) remove(ref(dbRef.current, `${DB_ROOT}/reports/${keyToDelete}`));
+    }
   }
 
   function handleSubmitReport(e) {
     e.preventDefault();
     if (!reportTargetUser) return;
-    const reasonClean = reportReason.trim() || "Uygunsuz davranış / uygunsuz mesaj";
-    const reportEntry = {
+    const entry = {
       id: "rep_" + Date.now() + "_" + Math.random().toString(36).slice(2, 5),
       targetId: reportTargetUser.id,
       targetName: reportTargetUser.name,
       reporterId: myId,
       reporterName: isFdAdmin ? "FD" : nickname.trim(),
-      reason: reasonClean,
+      reason: reportReason.trim() || "Uygunsuz mesaj / davranış",
       ts: Date.now(),
     };
     if (dbRef.current) {
-      push(ref(dbRef.current, `${DB_ROOT}/reports`), reportEntry);
+      push(ref(dbRef.current, `${DB_ROOT}/reports`), entry);
     } else {
-      setReportsList((prev) => [reportEntry, ...prev.slice(0, 79)]);
+      setReportsList((prev) => {
+        const next = [entry, ...prev.slice(0, 79)];
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(`${STORAGE_PREFIX}reports`, JSON.stringify(next));
+        }
+        return next;
+      });
     }
     setReportTargetUser(null);
     setReportReason("");
-    triggerPulse("Şikayet İletildi", `${reportTargetUser.name} hakkında şikayet FD yönetimine gönderildi.`);
+    setStatusNotice(`${reportTargetUser.name} şikayet edildi.`);
   }
 
-  function handleBanUser(targetUser, reportIdToClear = null) {
+  function handleBanUser(targetUser, repToClear = null) {
     if (!isFdAdmin || !targetUser || !targetUser.id || targetUser.id === myId) return;
-    const banRecord = {
+    const banRec = {
       id: targetUser.id,
       name: targetUser.name || "Kullanıcı",
       bannedBy: "FD",
       bannedAt: Date.now(),
     };
-    setBannedUsers((prev) => ({ ...prev, [targetUser.id]: banRecord }));
-    setOnlineUsers((prev) => prev.filter((u) => u.id !== targetUser.id));
-
+    const nextBans = { ...bannedUsers, [targetUser.id]: banRec };
+    setBannedUsers(nextBans);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(`${STORAGE_PREFIX}banned_users`, JSON.stringify(nextBans));
+    }
     if (dbRef.current) {
-      set(ref(dbRef.current, `${DB_ROOT}/banned_users/${targetUser.id}`), banRecord);
+      set(ref(dbRef.current, `${DB_ROOT}/banned_users/${targetUser.id}`), banRec);
       remove(ref(dbRef.current, `${DB_ROOT}/users/${targetUser.id}`));
-      if (reportIdToClear) {
-        remove(ref(dbRef.current, `${DB_ROOT}/reports/${reportIdToClear}`));
-      }
     }
-    if (reportIdToClear) {
-      setReportsList((prev) => prev.filter((r) => r.id !== reportIdToClear));
-    }
-    triggerPulse("FD Ban İşlemi", `${banRecord.name} sistemden banlandı.`);
+    if (repToClear) handleDismissReport(repToClear);
+    setStatusNotice(`${banRec.name} banlandı.`);
   }
 
   function handleUnbanUser(userId) {
@@ -584,51 +550,15 @@ export default function App() {
     setBannedUsers((prev) => {
       const next = { ...prev };
       delete next[userId];
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(`${STORAGE_PREFIX}banned_users`, JSON.stringify(next));
+      }
       return next;
     });
     if (dbRef.current) {
       remove(ref(dbRef.current, `${DB_ROOT}/banned_users/${userId}`));
     }
-    triggerPulse("Ban Kaldırıldı", "Kullanıcının banı kaldırıldı.");
-  }
-
-  function appendChatMessage(rawText, roomId = activeRoom) {
-    const clean = String(rawText || "").trim();
-    if (!clean) return;
-    const displayName = isFdAdmin ? "FD" : nickname.trim();
-    const msg = {
-      id: "c_" + Date.now() + "_" + Math.random().toString(36).slice(2, 5),
-      room: roomId,
-      senderId: myId,
-      senderName: displayName,
-      isAdminMsg: isFdAdmin,
-      city: cityTag.trim() || "Genel",
-      text: clean,
-      ts: Date.now(),
-    };
-    if (dbRef.current) {
-      push(ref(dbRef.current, `${DB_ROOT}/chat`), msg);
-    } else {
-      setChatMessages((prev) => [...prev.slice(-119), msg]);
-    }
-  }
-
-  function handleSendChat(e) {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
-    const textToSend = chatInput;
-    setChatInput("");
-    appendChatMessage(textToSend, activeRoom);
-  }
-
-  function handleQuickMatch() {
-    if (realOnlineDirectory.length === 0) {
-      triggerPulse("Çevrimiçi Kişi Yok", "Şu an eşleşebileceğin başka aktif kullanıcı görünmüyor.");
-      return;
-    }
-    const picked = realOnlineDirectory[Math.floor(Math.random() * realOnlineDirectory.length)];
-    setDmPeer(picked);
-    triggerPulse("Hızlı Eşleşme", `${picked.name} (${picked.city || "Genel"}) ile özel sohbet açıldı.`);
+    setStatusNotice("Ban kaldırıldı.");
   }
 
   function handleSendDm(e) {
@@ -636,267 +566,267 @@ export default function App() {
     if (!dmPeer || !dmPeer.id || !dmInput.trim()) return;
     const clean = dmInput.trim();
     setDmInput("");
-    const outgoing = {
+    const msg = {
+      id: "dm_" + Date.now() + "_" + Math.random().toString(36).slice(2, 5),
       senderId: myId,
       senderName: isFdAdmin ? "FD" : nickname.trim(),
       recipientId: dmPeer.id,
       text: clean,
       ts: Date.now(),
     };
-
     if (dbRef.current) {
-      const threadKey = buildDmThreadKey(myId, dmPeer.id);
-      push(ref(dbRef.current, `${DB_ROOT}/dms/${threadKey}`), outgoing);
+      push(ref(dbRef.current, `${DB_ROOT}/dms/${buildDmThreadKey(myId, dmPeer.id)}`), msg);
     } else {
-      setDmMessages((prev) => [
-        ...prev.slice(-99),
-        { id: "dm_" + Date.now(), ...outgoing },
-      ]);
+      setDmMessages((prev) => [...prev.slice(-99), msg]);
     }
   }
-
   if (!entered) {
     const needsFirstTimeFdSetup = typingFdName && (!storedFdAuth || !storedFdAuth.passwordHash);
 
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-slate-100 flex flex-col justify-center p-5">
-        <div className="max-w-md w-full mx-auto space-y-5">
-          <div className="text-center space-y-2.5">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-3xl bg-emerald-500/15 border border-emerald-400/40 text-emerald-400 shadow-lg shadow-emerald-950/60">
-              <HeartHandshake className="w-9 h-9" />
-            </div>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-bold text-emerald-300">
-              <Radio className="w-3.5 h-3.5 animate-pulse" />
-              Global & Türkiye Canlı Sohbet Ağı
-            </div>
-            <h1 className="text-3xl font-black tracking-tight text-white">Yanimda</h1>
-            <p className="text-sm text-slate-400">
-              Anlık durumunu paylaş, çevrimiçi toplulukla bağlan ve odalarda hemen sohbete başla.
-            </p>
+      <div className="min-h-screen bg-[#f5f5f0] text-[#1c2420] flex flex-col justify-between p-5">
+        <header className="max-w-md w-full mx-auto flex items-center justify-between pt-1">
+          <div className="flex items-center gap-2">
+            <HeartHandshake className="w-6 h-6 text-[#2f4d3b]" />
+            <span className="text-xl font-extrabold tracking-tight text-[#1c2420]">Yanimda</span>
           </div>
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-[#e2e4dc] text-xs font-semibold text-[#3a4940]">
+            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+            {realOnlineCount} çevrimiçi
+          </span>
+        </header>
 
-          <form
-            onSubmit={handleEnter}
-            className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 space-y-4 shadow-2xl"
-          >
-            <div className="space-y-1.5">
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
-                Adın / Takma Adın
-              </label>
+        <main className="max-w-md w-full mx-auto space-y-5 my-auto py-6">
+          <div className="flex justify-center">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-[#e2e4dc] shadow-sm">
               <input
                 type="text"
-                maxLength={20}
+                maxLength={22}
                 value={nickname}
                 onChange={(e) => {
                   setNickname(e.target.value);
                   if (loginError) setLoginError("");
                 }}
-                placeholder="Örn: Emirhan"
-                className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400 text-sm"
+                placeholder="Takma adın..."
+                className="bg-transparent text-sm font-bold text-[#1c2420] focus:outline-none w-36 text-center"
               />
+              {!typingFdName && (
+                <button
+                  type="button"
+                  onClick={handleRandomNick}
+                  title="Rasgele takma ad seç"
+                  className="p-1 rounded-lg text-[#5a6960] hover:bg-[#f0f1eb]"
+                >
+                  <Shuffle className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
+          </div>
 
-            {typingFdName && (
-              <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/40 space-y-3">
-                <div className="flex items-center gap-2 text-xs font-extrabold text-amber-300">
-                  <Lock className="w-4 h-4" />
-                  {needsFirstTimeFdSetup
-                    ? "FD Sınırsız Yönetici Parolası Oluştur"
-                    : "FD Korumalı Yönetici Girişi"}
-                </div>
+          <div className="text-center space-y-2.5">
+            <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-[#18201c] leading-tight">
+              Önce oda,
+              <br />
+              sonra sohbet.
+            </h1>
+            <p className="text-sm text-[#56635c] max-w-xs mx-auto leading-relaxed">
+              Her şey <strong className="text-[#18201c]">Yanimda</strong>&apos;yla başlar. Rastgele biriyle eşleş ya da futbol, siyaset veya gündem odasına gir.
+            </p>
+          </div>
+
+          {typingFdName && (
+            <div className="bg-white border border-amber-300 rounded-2xl p-4 space-y-2.5 shadow-sm">
+              <div className="flex items-center gap-1.5 text-xs font-extrabold text-amber-800">
+                <Lock className="w-4 h-4" />
+                {needsFirstTimeFdSetup ? "FD Yönetici Parolası Oluştur" : "FD Parola Girişi"}
+              </div>
+              <input
+                type="password"
+                value={fdPasswordInput}
+                onChange={(e) => {
+                  setFdPasswordInput(e.target.value);
+                  if (loginError) setLoginError("");
+                }}
+                placeholder={needsFirstTimeFdSetup ? "Yeni FD parolası..." : "FD parolan..."}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#f8f8f4] border border-[#dce0d8] text-sm text-[#18201c] focus:outline-none focus:border-[#2f4d3b]"
+              />
+              {needsFirstTimeFdSetup && (
                 <input
                   type="password"
-                  value={fdPasswordInput}
+                  value={fdPasswordConfirm}
                   onChange={(e) => {
-                    setFdPasswordInput(e.target.value);
+                    setFdPasswordConfirm(e.target.value);
                     if (loginError) setLoginError("");
                   }}
-                  placeholder={needsFirstTimeFdSetup ? "Yeni FD parolası belirle" : "FD parolanı gir"}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-amber-500/40 text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 text-sm"
+                  placeholder="FD parolasını tekrar gir..."
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#f8f8f4] border border-[#dce0d8] text-sm text-[#18201c] focus:outline-none focus:border-[#2f4d3b]"
                 />
-                {needsFirstTimeFdSetup && (
-                  <input
-                    type="password"
-                    value={fdPasswordConfirm}
-                    onChange={(e) => {
-                      setFdPasswordConfirm(e.target.value);
-                      if (loginError) setLoginError("");
-                    }}
-                    placeholder="FD parolasını tekrar gir"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-amber-500/40 text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 text-sm"
-                  />
-                )}
-              </div>
-            )}
+              )}
+            </div>
+          )}
 
-            <div className="space-y-1.5">
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
-                Şehir / Bölge
-              </label>
-              <input
-                type="text"
-                maxLength={24}
-                value={cityTag}
-                onChange={(e) => setCityTag(e.target.value)}
-                placeholder="Örn: Körfez, İstanbul, Londra"
-                className="w-full px-4 py-3 rounded-2xl bg-slate-950 border border-slate-700 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400 text-sm"
-              />
-            </div>
+          {loginError && (
+            <p className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-2xl px-4 py-2.5 text-center">
+              {loginError}
+            </p>
+          )}
 
-            {loginError && (
-              <p className="text-xs font-semibold text-rose-400 bg-rose-950/50 border border-rose-500/40 rounded-xl px-3 py-2">
-                {loginError}
-              </p>
-            )}
+          <button
+            type="button"
+            onClick={handleEnter}
+            disabled={!nickname.trim()}
+            className="w-full py-4 rounded-2xl bg-[#2d4939] hover:bg-[#243c2e] disabled:opacity-40 text-white font-bold text-base flex items-center justify-center gap-2 shadow-sm transition"
+          >
+            <span>Rastgele Eşleş</span>
+            <span>→</span>
+          </button>
 
-            <button
-              type="submit"
-              disabled={!nickname.trim()}
-              className="w-full py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 font-black text-sm text-slate-950 flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-500/20"
-            >
-              <Sparkles className="w-4 h-4" />
-              Yanimda&apos;ya Giriş Yap
-            </button>
-          </form>
-
-          <div className="grid grid-cols-3 gap-2 text-center text-[11px] text-slate-400">
-            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-2.5">
-              <div className="font-extrabold text-white">4 Canlı Oda</div>
-              <div>TR & Global</div>
-            </div>
-            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-2.5">
-              <div className="font-extrabold text-white">Hızlı Eşleşme</div>
-              <div>Tek dokunuş</div>
-            </div>
-            <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-2.5">
-              <div className="font-extrabold text-white">
-                {FIREBASE_CONFIG?.databaseURL ? "Canlı DB" : "Yerel Mod"}
-              </div>
-              <div>Anlık akış</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 pb-12">
-      <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-3">
-        <div className="max-w-md mx-auto flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-400/40 flex items-center justify-center text-emerald-400 shrink-0">
-              <HeartHandshake className="w-5 h-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <h1 className="text-base font-black text-white truncate">Yanimda</h1>
-                {isFdAdmin ? (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/50 text-amber-300 font-extrabold flex items-center gap-0.5 shrink-0">
-                    <Shield className="w-3 h-3" />
-                    FD YETKİ
-                  </span>
-                ) : (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 font-bold shrink-0">
-                    {currentStatusMeta.label}
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400 truncate flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                {isFdAdmin ? "FD (Sınırsız Yetki)" : nickname.trim()} • {cityTag.trim() || "Genel"} • {realOnlineDirectory.length + 1} aktif
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="grid grid-cols-2 gap-3">
             <button
               type="button"
-              onClick={handleQuickMatch}
-              title="Hızlı Eşleş"
-              className="p-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/40 text-emerald-300 transition"
+              onClick={(e) => {
+                setViewMode("people");
+                handleEnter(e);
+              }}
+              className="py-3.5 px-4 rounded-2xl bg-white hover:bg-[#fafaf7] border border-[#e2e4dc] text-sm font-bold text-[#1c2420] flex items-center justify-center gap-2 shadow-sm transition"
             >
-              <Shuffle className="w-4 h-4" />
+              <Users className="w-4 h-4 text-[#4a5a51]" />
+              <span>Kişiler</span>
             </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                setViewMode("room");
+                handleEnter(e);
+              }}
+              className="py-3.5 px-4 rounded-2xl bg-white hover:bg-[#fafaf7] border border-[#e2e4dc] text-sm font-bold text-[#1c2420] flex items-center justify-center gap-2 shadow-sm transition"
+            >
+              <MessageCircle className="w-4 h-4 text-[#4a5a51]" />
+              <span>Odalar</span>
+            </button>
+          </div>
+
+          <div className="pt-2 space-y-2.5">
+            <div className="flex items-center gap-3 text-[11px] font-bold tracking-widest uppercase text-[#7a867f]">
+              <span className="h-px flex-1 bg-[#e0e2da]" />
+              <span>Sohbet Odaları</span>
+              <span className="h-px flex-1 bg-[#e0e2da]" />
+            </div>
+
+            <div className="flex gap-2.5 overflow-x-auto pb-1">
+              {SIMPLE_ROOMS.map((rm) => (
+                <button
+                  key={rm.id}
+                  type="button"
+                  onClick={(e) => {
+                    setActiveRoom(rm.id);
+                    setViewMode("room");
+                    handleEnter(e);
+                  }}
+                  className="bg-white hover:bg-[#fafaf7] border border-[#e2e4dc] rounded-2xl px-4 py-3 flex items-center gap-2.5 shrink-0 shadow-sm transition"
+                >
+                  <span className="w-8 h-8 rounded-xl bg-[#f1f3ec] text-[#2d4939] flex items-center justify-center">
+                    <RoomIcon name={rm.icon} className="w-4 h-4" />
+                  </span>
+                  <div className="text-left">
+                    <div className="text-xs font-extrabold text-[#18201c]">{rm.title}</div>
+                    <div className="text-[10px] text-[#6d7a72]">{rm.badge}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </main>
+
+        <footer className="max-w-md w-full mx-auto text-center text-[11px] text-[#78847d]">
+          Yanimda • Gerçek çevrimiçi topluluk
+        </footer>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#f5f5f0] text-[#1c2420] flex flex-col justify-between pb-6">
+      <div className="max-w-md w-full mx-auto p-4 space-y-4">
+        <header className="flex items-center justify-between gap-2 pt-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <HeartHandshake className="w-6 h-6 text-[#2f4d3b] shrink-0" />
+            <span className="text-lg font-black tracking-tight text-[#18201c] truncate">
+              Yanimda
+            </span>
+            {isFdAdmin && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-[10px] font-extrabold text-amber-900 shrink-0">
+                <Shield className="w-3 h-3" />
+                FD
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-[#e2e4dc] text-xs font-semibold text-[#3a4940]">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              {realOnlineCount} çevrimiçi
+            </span>
             <button
               type="button"
               onClick={handleLogout}
-              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 flex items-center gap-1"
+              className="p-2 rounded-full bg-white hover:bg-[#fafaf7] border border-[#e2e4dc] text-[#4a5a51]"
+              title="Çıkış"
             >
               <LogOut className="w-3.5 h-3.5" />
-              Çıkış
             </button>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="max-w-md mx-auto p-4 space-y-4">
-        {pulseBanner && (
-          <div className="bg-emerald-950/60 border border-emerald-500/40 rounded-2xl px-3.5 py-2.5 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <Bell className="w-4 h-4 text-emerald-300 shrink-0" />
-              <div className="text-xs truncate">
-                <strong className="text-emerald-200">{pulseBanner.title}:</strong>{" "}
-                <span className="text-slate-200">{pulseBanner.body}</span>
-              </div>
-            </div>
+        {statusNotice && (
+          <div className="bg-white border border-[#dce0d8] rounded-2xl px-3.5 py-2 flex items-center justify-between text-xs text-[#28352e] shadow-sm">
+            <span>{statusNotice}</span>
             <button
               type="button"
-              onClick={() => setPulseBanner(null)}
-              className="text-slate-400 hover:text-white shrink-0"
+              onClick={() => setStatusNotice("")}
+              className="text-[#6d7a72] hover:text-[#18201c]"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
         {isFdAdmin && (
-          <section className="bg-amber-950/30 border border-amber-500/40 rounded-2xl p-3.5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-extrabold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
-                <Shield className="w-4 h-4" />
-                FD Sınırsız Yönetim ({reportsList.length} Şikayet)
-              </h2>
+          <section className="bg-white border border-amber-300 rounded-2xl p-3.5 space-y-2.5 shadow-sm">
+            <div className="text-xs font-extrabold text-amber-900 flex items-center gap-1.5">
+              <Shield className="w-4 h-4" />
+              FD Yönetim ({reportsList.length} Şikayet)
             </div>
-
             {reportsList.length === 0 ? (
-              <p className="text-xs text-slate-400">Şikayet edilen kullanıcı bulunmuyor.</p>
+              <p className="text-xs text-[#6d7a72]">Aktif şikayet yok.</p>
             ) : (
-              <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-36 overflow-y-auto">
                 {reportsList.map((rep) => (
                   <div
-                    key={rep.id}
-                    className="bg-slate-950/95 border border-amber-500/25 rounded-xl p-2.5 flex items-center justify-between gap-2"
+                    key={rep.fbKey || rep.id}
+                    className="bg-[#f8f8f4] border border-[#e4e6de] rounded-xl p-2.5 flex items-center justify-between gap-2"
                   >
                     <div className="min-w-0">
-                      <div className="text-xs font-bold text-white truncate">
-                        Hedef: <span className="text-rose-400">{rep.targetName}</span>{" "}
-                        <span className="text-[10px] text-slate-400 font-normal">
-                          (Bildiren: {rep.reporterName})
-                        </span>
+                      <div className="text-xs font-bold text-[#18201c] truncate">
+                        {rep.targetName}{" "}
+                        <span className="font-normal text-[#6d7a72]">({rep.reporterName})</span>
                       </div>
-                      <div className="text-[11px] text-slate-300 truncate">Sebep: {rep.reason}</div>
+                      <div className="text-[11px] text-[#4f5d55] truncate">{rep.reason}</div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
                         type="button"
-                        onClick={() =>
-                          handleBanUser(
-                            { id: rep.targetId, name: rep.targetName },
-                            rep.id
-                          )
-                        }
-                        className="px-2.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-[11px] font-extrabold text-white flex items-center gap-1"
+                        onClick={() => handleBanUser({ id: rep.targetId, name: rep.targetName }, rep)}
+                        className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-[11px] font-bold text-white flex items-center gap-1"
                       >
                         <Ban className="w-3 h-3" />
                         Banla
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          setReportsList((prev) => prev.filter((x) => x.id !== rep.id));
-                          if (dbRef.current) remove(ref(dbRef.current, `${DB_ROOT}/reports/${rep.id}`));
-                        }}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
-                        title="Şikayeti kapat"
+                        onClick={() => handleDismissReport(rep)}
+                        className="p-1 rounded-lg bg-[#e9ece5] text-[#3a4940]"
+                        title="Kapat"
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -905,315 +835,97 @@ export default function App() {
                 ))}
               </div>
             )}
-
             {Object.keys(bannedUsers).length > 0 && (
-              <div className="pt-2 border-t border-amber-500/20 space-y-1.5">
-                <div className="text-[11px] font-bold text-amber-200">Banlanan Kullanıcılar:</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {Object.values(bannedUsers).map((b) => (
-                    <span
-                      key={b.id}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-[11px] text-slate-300"
+              <div className="flex flex-wrap gap-1.5 pt-1 border-t border-[#eceee7]">
+                {Object.values(bannedUsers).map((b) => (
+                  <span
+                    key={b.id}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#f5f5f0] text-[11px] text-[#3a4940]"
+                  >
+                    {b.name}
+                    <button
+                      type="button"
+                      onClick={() => handleUnbanUser(b.id)}
+                      className="font-bold text-[#2d4939] underline"
                     >
-                      {b.name}
-                      <button
-                        type="button"
-                        onClick={() => handleUnbanUser(b.id)}
-                        className="text-emerald-400 hover:text-emerald-300 font-bold"
-                      >
-                        Banı Kaldır
-                      </button>
-                    </span>
-                  ))}
-                </div>
+                      Kaldır
+                    </button>
+                  </span>
+                ))}
               </div>
             )}
           </section>
         )}
 
-        <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-              Canlı Durumun
-            </span>
-            <span className="text-[10px] text-emerald-400 font-bold">● Anlık Görünür</span>
+        <div className="text-center space-y-2 py-1">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white border border-[#e2e4dc] text-xs font-bold text-[#1c2420] shadow-sm">
+            <span>{isFdAdmin ? "FD" : nickname.trim()}</span>
+            <span className="text-[#8a968f]">•</span>
+            <span className="text-[#2d4939]">{currentRoomObj.title}</span>
           </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {STATUS_TAGS.map((st) => {
-              const active = statusTag === st.id;
-              return (
-                <button
-                  key={st.id}
-                  type="button"
-                  onClick={() => setStatusTag(st.id)}
-                  className={`py-2 px-3 rounded-xl border text-xs font-bold text-left flex items-center gap-2 transition ${
-                    active
-                      ? "bg-emerald-500/20 border-emerald-400 text-white"
-                      : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  <span className={`w-2 h-2 rounded-full ${st.dot}`} />
-                  {st.label}
-                </button>
-              );
-            })}
-          </div>
-        </section>
+          <h2 className="text-2xl font-black tracking-tight text-[#18201c]">
+            {currentRoomObj.title} Odası
+          </h2>
+        </div>
 
-        <nav className="grid grid-cols-3 gap-1.5 bg-slate-900 border border-slate-800 rounded-2xl p-1.5">
+        <button
+          type="button"
+          onClick={handleQuickMatch}
+          className="w-full py-3.5 rounded-2xl bg-[#2d4939] hover:bg-[#243c2e] text-white font-bold text-sm flex items-center justify-center gap-2 shadow-sm transition"
+        >
+          <Shuffle className="w-4 h-4" />
+          <span>Rastgele Eşleş</span>
+          <span>→</span>
+        </button>
+
+        <div className="grid grid-cols-2 gap-3">
           <button
             type="button"
-            onClick={() => setActiveTab("feed")}
-            className={`py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition ${
-              activeTab === "feed"
-                ? "bg-emerald-500 text-slate-950"
-                : "text-slate-400 hover:text-slate-200"
+            onClick={() => setViewMode("people")}
+            className={`py-3 px-4 rounded-2xl border text-xs font-extrabold flex items-center justify-center gap-2 transition ${
+              viewMode === "people"
+                ? "bg-[#18201c] text-white border-[#18201c]"
+                : "bg-white text-[#1c2420] border-[#e2e4dc]"
             }`}
           >
-            <Flame className="w-3.5 h-3.5" />
-            Akış ({posts.length})
+            <Users className="w-4 h-4" />
+            <span>Kişiler ({otherRealUsers.length})</span>
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab("people")}
-            className={`py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition ${
-              activeTab === "people"
-                ? "bg-emerald-500 text-slate-950"
-                : "text-slate-400 hover:text-slate-200"
+            onClick={() => setViewMode("room")}
+            className={`py-3 px-4 rounded-2xl border text-xs font-extrabold flex items-center justify-center gap-2 transition ${
+              viewMode === "room"
+                ? "bg-[#18201c] text-white border-[#18201c]"
+                : "bg-white text-[#1c2420] border-[#e2e4dc]"
             }`}
           >
-            <Users className="w-3.5 h-3.5" />
-            Kişiler ({filteredDirectory.length})
+            <MessageCircle className="w-4 h-4" />
+            <span>Oda Sohbeti</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("chat")}
-            className={`py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition ${
-              activeTab === "chat"
-                ? "bg-emerald-500 text-slate-950"
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            <MessageCircle className="w-3.5 h-3.5" />
-            Odalar
-          </button>
-        </nav>
+        </div>
 
-        {activeTab === "feed" && (
-          <div className="space-y-3">
-            <form
-              onSubmit={handleCreatePost}
-              className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-2.5"
-            >
-              <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-                {["Genel", "Türkiye", "Global", "Destek"].map((cat) => (
-                  <button
-                    key={cat}
-                    type="button"
-                    onClick={() => setPostCategory(cat)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 border transition ${
-                      postCategory === cat
-                        ? "bg-emerald-500/20 border-emerald-400 text-emerald-200"
-                        : "bg-slate-950 border-slate-800 text-slate-400"
-                    }`}
-                  >
-                    #{cat}
-                  </button>
-                ))}
-              </div>
-              <textarea
-                rows={2}
-                maxLength={240}
-                value={postText}
-                onChange={(e) => setPostText(e.target.value)}
-                placeholder="Ne paylaşmak istersin? Anlık bir durum veya sohbet çağrısı yaz..."
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400 resize-none"
-              />
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-slate-500">{postText.length}/240</span>
-                <button
-                  type="submit"
-                  disabled={!postText.trim()}
-                  className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-xs font-black text-slate-950 flex items-center gap-1.5"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  Paylaş
-                </button>
-              </div>
-            </form>
-
-            {posts.length === 0 ? (
-              <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 text-center text-xs text-slate-400">
-                Henüz akış paylaşımı yok. İlk mesajı sen bırak ve topluluğu başlat!
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                {posts.map((p) => {
-                  const canDeletePost = isFdAdmin || p.authorId === myId;
-                  return (
-                    <article
-                      key={p.id}
-                      className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-2"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-xs font-extrabold text-white truncate">
-                              {p.authorName}
-                            </span>
-                            {p.isAdminPost && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-extrabold">
-                                FD
-                              </span>
-                            )}
-                            {p.category && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-bold">
-                                #{p.category}
-                              </span>
-                            )}
-                            {p.statusLabel && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 font-semibold">
-                                {p.statusLabel}
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
-                            <MapPin className="w-3 h-3 text-slate-500" />
-                            {p.city || "Genel"} • {formatTime(p.createdAt)}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1 shrink-0">
-                          {p.authorId !== myId && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setReportTargetUser({ id: p.authorId, name: p.authorName });
-                                setReportReason("");
-                              }}
-                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-amber-950/70 text-amber-300"
-                              title="Şikayet Et"
-                            >
-                              <Flag className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          {isFdAdmin && p.authorId !== myId && (
-                            <button
-                              type="button"
-                              onClick={() => handleBanUser({ id: p.authorId, name: p.authorName })}
-                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-600 text-rose-300 hover:text-white"
-                              title="Kullanıcıyı Banla"
-                            >
-                              <Ban className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          {canDeletePost && (
-                            <button
-                              type="button"
-                              onClick={() => handleDeletePost(p.id)}
-                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/70 text-slate-400 hover:text-rose-300"
-                              title="Sil"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      <p className="text-sm text-slate-100 whitespace-pre-line">{p.text}</p>
-
-                      <div className="pt-1 flex items-center justify-between">
-                        <button
-                          type="button"
-                          onClick={() => handleCheerPost(p.id)}
-                          className="px-3 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-emerald-300 flex items-center gap-1"
-                        >
-                          <HeartHandshake className="w-3.5 h-3.5" />
-                          Yanındayım ({p.cheers || 0})
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === "people" && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-3">
-            <div className="relative">
-              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={peopleQuery}
-                onChange={(e) => setPeopleQuery(e.target.value)}
-                placeholder="İsim veya şehir ara..."
-                className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400"
-              />
-            </div>
-
-            <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-              <button
-                type="button"
-                onClick={() => setStatusFilter("all")}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${
-                  statusFilter === "all"
-                    ? "bg-emerald-500 text-slate-950"
-                    : "bg-slate-950 text-slate-400 border border-slate-800"
-                }`}
-              >
-                Tümü
-              </button>
-              {STATUS_TAGS.map((st) => (
-                <button
-                  key={st.id}
-                  type="button"
-                  onClick={() => setStatusFilter(st.id)}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${
-                    statusFilter === st.id
-                      ? "bg-emerald-500 text-slate-950"
-                      : "bg-slate-950 text-slate-400 border border-slate-800"
-                  }`}
-                >
-                  {st.badge}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center justify-between bg-slate-950 border border-emerald-500/30 rounded-xl px-3 py-2.5">
-              <div>
-                <div className="text-xs font-extrabold text-white">
-                  {isFdAdmin ? "FD" : nickname.trim()} <span className="text-emerald-400">(Sen)</span>
-                </div>
-                <div className="text-[11px] text-slate-400">
-                  {cityTag.trim() || "Genel"} • {isFdAdmin ? "Sınırsız Yetki" : currentStatusMeta.label}
-                </div>
-              </div>
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-            </div>
-
-            {filteredDirectory.length === 0 ? (
-              <p className="text-xs text-slate-400 text-center py-6">
-                Şu an aktif başka gerçek kullanıcı yok. İkinci bir sekme veya cihazdan giriş yaptığında burada görünür.
+        {viewMode === "people" ? (
+          <div className="bg-white border border-[#e2e4dc] rounded-2xl p-3.5 space-y-2.5 shadow-sm">
+            {otherRealUsers.length === 0 ? (
+              <p className="text-xs text-[#6d7a72] text-center py-8">
+                Şu an aktif başka kişi yok. Başka bir giriş yaptığında burada görünür.
               </p>
             ) : (
-              filteredDirectory.map((u) => (
+              otherRealUsers.map((u) => (
                 <div
                   key={u.id}
-                  className="flex items-center justify-between gap-2 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5"
+                  className="flex items-center justify-between gap-2 bg-[#f8f8f4] border border-[#e7e9e2] rounded-xl px-3 py-2.5"
                 >
                   <div className="min-w-0">
-                    <div className="text-xs font-bold text-white truncate">{u.name}</div>
-                    <div className="text-[11px] text-slate-400 truncate">
-                      {u.city || "Genel"} • {u.status || "Müsait"}
-                    </div>
+                    <div className="text-xs font-extrabold text-[#18201c] truncate">{u.name}</div>
+                    <div className="text-[11px] text-[#6d7a72]">Çevrimiçi</div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
                       onClick={() => setDmPeer(u)}
-                      className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-emerald-500 hover:text-slate-950 text-xs font-bold text-emerald-300 transition"
+                      className="px-3 py-1.5 rounded-xl bg-[#2d4939] text-white text-xs font-bold"
                     >
                       Mesaj
                     </button>
@@ -1223,7 +935,7 @@ export default function App() {
                         setReportTargetUser(u);
                         setReportReason("");
                       }}
-                      className="p-1.5 rounded-xl bg-slate-800 hover:bg-amber-950/70 text-amber-300"
+                      className="p-1.5 rounded-xl bg-white border border-[#dce0d8] text-amber-700"
                       title="Şikayet Et"
                     >
                       <Flag className="w-3.5 h-3.5" />
@@ -1232,7 +944,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleBanUser(u)}
-                        className="p-1.5 rounded-xl bg-rose-950/70 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40"
+                        className="p-1.5 rounded-xl bg-rose-600 text-white"
                         title="Banla"
                       >
                         <Ban className="w-3.5 h-3.5" />
@@ -1243,71 +955,43 @@ export default function App() {
               ))
             )}
           </div>
-        )}
-
-        {activeTab === "chat" && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 space-y-3">
-            <div className="grid grid-cols-2 gap-1.5">
-              {ROOM_CHANNELS.map((rm) => {
-                const isSelected = activeRoom === rm.id;
-                return (
-                  <button
-                    key={rm.id}
-                    type="button"
-                    onClick={() => setActiveRoom(rm.id)}
-                    className={`p-2.5 rounded-xl border text-left transition ${
-                      isSelected
-                        ? "bg-emerald-500/20 border-emerald-400 text-white"
-                        : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-xs font-extrabold">
-                      <span>{rm.title}</span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-emerald-300">
-                        {rm.tag}
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-slate-400 truncate mt-0.5">{rm.desc}</div>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-              {QUICK_REACTIONS.map((em) => (
-                <button
-                  key={em}
-                  type="button"
-                  onClick={() => appendChatMessage(em, activeRoom)}
-                  className="px-2.5 py-1 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-sm shrink-0"
-                >
-                  {em}
-                </button>
-              ))}
-            </div>
-
+        ) : (
+          <div className="bg-white border border-[#e2e4dc] rounded-2xl p-3.5 space-y-3 shadow-sm">
             <div className="h-64 overflow-y-auto space-y-2 pr-1">
-              {roomMessages.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-12">
-                  Bu odada henüz mesaj yok. İlk mesajı sen yaz!
+              {currentRoomMessages.length === 0 ? (
+                <p className="text-xs text-[#78847d] text-center py-12">
+                  {currentRoomObj.title} odasında henüz mesaj yok. İlk mesajı yaz!
                 </p>
               ) : (
-                roomMessages.map((m) => {
+                currentRoomMessages.map((m) => {
                   const mine = m.senderId === myId;
                   return (
                     <div
-                      key={m.id}
+                      key={m.fbKey || m.id}
                       className={`flex flex-col ${mine ? "items-end" : "items-start"}`}
                     >
                       <div className="flex items-center gap-1.5 px-1 mb-0.5">
-                        <span className="text-[10px] text-slate-500">
-                          {mine ? "Sen" : `${m.senderName} (${m.city || "Genel"})`}
+                        <span className="text-[10px] font-semibold text-[#6d7a72]">
+                          {mine ? "Sen" : m.senderName}
                         </span>
-                        {isFdAdmin && !mine && (
+                        {!mine && (
                           <button
                             type="button"
-                            onClick={() => handleDeleteChatMessage(m.id)}
-                            className="p-0.5 rounded text-rose-400 hover:bg-rose-950/70"
+                            onClick={() => {
+                              setReportTargetUser({ id: m.senderId, name: m.senderName });
+                              setReportReason("");
+                            }}
+                            className="p-0.5 text-amber-700"
+                            title="Şikayet Et"
+                          >
+                            <Flag className="w-3 h-3" />
+                          </button>
+                        )}
+                        {isFdAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRoomMessage(m)}
+                            className="p-0.5 text-rose-600"
                             title="Mesajı Sil"
                           >
                             <Trash2 className="w-3 h-3" />
@@ -1317,18 +1001,18 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => handleBanUser({ id: m.senderId, name: m.senderName })}
-                            className="p-0.5 rounded text-amber-300 hover:bg-rose-950/70"
-                            title="Göndereni Banla"
+                            className="p-0.5 text-rose-700"
+                            title="Banla"
                           >
                             <Ban className="w-3 h-3" />
                           </button>
                         )}
                       </div>
                       <div
-                        className={`px-3 py-2 rounded-2xl text-xs max-w-[82%] ${
+                        className={`px-3.5 py-2 rounded-2xl text-xs max-w-[82%] ${
                           mine
-                            ? "bg-emerald-500 text-slate-950 font-semibold rounded-br-sm"
-                            : "bg-slate-800 text-slate-100 rounded-bl-sm"
+                            ? "bg-[#2d4939] text-white font-medium rounded-br-sm"
+                            : "bg-[#f2f3ed] text-[#18201c] rounded-bl-sm"
                         }`}
                       >
                         {m.text}
@@ -1340,68 +1024,92 @@ export default function App() {
               <div ref={chatBottomRef} />
             </div>
 
-            <form onSubmit={handleSendChat} className="flex items-center gap-2">
+            <form onSubmit={handleSendRoomMessage} className="flex items-center gap-2">
               <input
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder={`${ROOM_CHANNELS.find((r) => r.id === activeRoom)?.title || "Oda"} sohbetine yaz...`}
-                className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400"
+                placeholder={`${currentRoomObj.title} odasına yaz...`}
+                className="flex-1 px-3.5 py-2.5 rounded-xl bg-[#f8f8f4] border border-[#dce0d8] text-xs text-[#18201c] focus:outline-none focus:border-[#2d4939]"
               />
               <button
                 type="submit"
-                className="p-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold"
+                className="p-2.5 rounded-xl bg-[#2d4939] hover:bg-[#243c2e] text-white"
               >
                 <Send className="w-4 h-4" />
               </button>
             </form>
           </div>
         )}
-      </main>
+
+        <div className="pt-1 space-y-2">
+          <div className="flex items-center gap-3 text-[11px] font-bold tracking-widest uppercase text-[#7a867f]">
+            <span className="h-px flex-1 bg-[#e0e2da]" />
+            <span>Sohbet Odaları</span>
+            <span className="h-px flex-1 bg-[#e0e2da]" />
+          </div>
+
+          <div className="flex gap-2.5 overflow-x-auto pb-1">
+            {SIMPLE_ROOMS.map((rm) => {
+              const selected = activeRoom === rm.id;
+              return (
+                <button
+                  key={rm.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveRoom(rm.id);
+                    setViewMode("room");
+                  }}
+                  className={`rounded-2xl px-4 py-3 flex items-center gap-2.5 shrink-0 border transition ${
+                    selected
+                      ? "bg-[#2d4939] text-white border-[#2d4939]"
+                      : "bg-white text-[#18201c] border-[#e2e4dc]"
+                  }`}
+                >
+                  <RoomIcon name={rm.icon} className="w-4 h-4 shrink-0" />
+                  <span className="text-xs font-extrabold">{rm.title}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
 
       {reportTargetUser && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <form
             onSubmit={handleSubmitReport}
-            className="bg-slate-900 border border-slate-700 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl"
+            className="bg-white border border-[#e2e4dc] rounded-2xl max-w-sm w-full p-4 space-y-3 shadow-xl"
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-extrabold text-white flex items-center gap-1.5">
-                <Flag className="w-4 h-4 text-amber-400" />
+              <h3 className="text-sm font-extrabold text-[#18201c]">
                 {reportTargetUser.name} Şikayet Et
               </h3>
-              <button
-                type="button"
-                onClick={() => setReportTargetUser(null)}
-                className="p-1.5 rounded-xl bg-slate-800 text-slate-300"
-              >
-                <X className="w-4 h-4" />
+              <button type="button" onClick={() => setReportTargetUser(null)}>
+                <X className="w-4 h-4 text-[#6d7a72]" />
               </button>
             </div>
-            <p className="text-xs text-slate-400">
-              Şikayetiniz FD yönetimine iletilir. Gerekirse kullanıcı banlanır.
-            </p>
             <input
               type="text"
               maxLength={120}
               value={reportReason}
               onChange={(e) => setReportReason(e.target.value)}
-              placeholder="Şikayet sebebi (örn: uygunsuz mesaj, spam)..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
+              placeholder="Şikayet sebebi..."
+              className="w-full px-3.5 py-2 rounded-xl bg-[#f8f8f4] border border-[#dce0d8] text-xs text-[#18201c]"
             />
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setReportTargetUser(null)}
-                className="py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-200"
+                className="py-2 rounded-xl bg-[#f0f1eb] text-xs font-bold text-[#3a4940]"
               >
                 Vazgeç
               </button>
               <button
                 type="submit"
-                className="py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold"
+                className="py-2 rounded-xl bg-[#2d4939] text-xs font-bold text-white"
               >
-                Şikayeti Gönder
+                Gönder
               </button>
             </div>
           </form>
@@ -1409,42 +1117,37 @@ export default function App() {
       )}
 
       {dmPeer && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-md w-full p-4 space-y-3 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-              <div>
-                <h3 className="text-sm font-extrabold text-white">{dmPeer.name}</h3>
-                <p className="text-[11px] text-slate-400">
-                  {dmPeer.city || "Genel"} • Özel Sohbet
-                </p>
-              </div>
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white border border-[#e2e4dc] rounded-2xl max-w-md w-full p-4 space-y-3 shadow-xl">
+            <div className="flex items-center justify-between border-b border-[#eceee7] pb-2">
+              <h3 className="text-sm font-extrabold text-[#18201c]">{dmPeer.name}</h3>
               <button
                 type="button"
                 onClick={() => setDmPeer(null)}
-                className="p-1.5 rounded-xl bg-slate-800 text-slate-300"
+                className="p-1 rounded-lg bg-[#f0f1eb] text-[#3a4940]"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="h-60 overflow-y-auto space-y-2 pr-1">
+            <div className="h-56 overflow-y-auto space-y-2 pr-1">
               {dmMessages.length === 0 ? (
-                <p className="text-xs text-slate-500 text-center py-10">
-                  {dmPeer.name} ile özel sohbeti başlatmak için ilk mesajı yaz.
+                <p className="text-xs text-[#78847d] text-center py-10">
+                  {dmPeer.name} ile özel sohbeti başlat.
                 </p>
               ) : (
                 dmMessages.map((m) => {
                   const mine = m.senderId === myId;
                   return (
                     <div
-                      key={m.id}
+                      key={m.fbKey || m.id}
                       className={`flex flex-col ${mine ? "items-end" : "items-start"}`}
                     >
                       <div
                         className={`px-3 py-2 rounded-2xl text-xs max-w-[82%] ${
                           mine
-                            ? "bg-emerald-500 text-slate-950 font-semibold rounded-br-sm"
-                            : "bg-slate-800 text-slate-100 rounded-bl-sm"
+                            ? "bg-[#2d4939] text-white rounded-br-sm"
+                            : "bg-[#f2f3ed] text-[#18201c] rounded-bl-sm"
                         }`}
                       >
                         {m.text}
@@ -1462,11 +1165,11 @@ export default function App() {
                 value={dmInput}
                 onChange={(e) => setDmInput(e.target.value)}
                 placeholder={`${dmPeer.name} kişisine mesaj yaz...`}
-                className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-400"
+                className="flex-1 px-3.5 py-2 rounded-xl bg-[#f8f8f4] border border-[#dce0d8] text-xs text-[#18201c]"
               />
               <button
                 type="submit"
-                className="p-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold"
+                className="p-2 rounded-xl bg-[#2d4939] text-white"
               >
                 <Send className="w-4 h-4" />
               </button>
@@ -1477,4 +1180,3 @@ export default function App() {
     </div>
   );
 }
-
