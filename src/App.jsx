@@ -56,6 +56,35 @@ const RANDOM_NICKS = [
   "Sakin Liman",
 ];
 
+const WHEEL_COLORS = [
+  "#2d4939",
+  "#3f624d",
+  "#4f6f5b",
+  "#1f3529",
+  "#5f7f6a",
+  "#263e30",
+];
+
+function polarToCartesian(cx, cy, r, angleDeg) {
+  const rad = ((angleDeg - 90) * Math.PI) / 180;
+  return {
+    x: cx + r * Math.cos(rad),
+    y: cy + r * Math.sin(rad),
+  };
+}
+
+function buildSlicePath(cx, cy, r, startAngle, endAngle) {
+  const start = polarToCartesian(cx, cy, r, endAngle);
+  const end = polarToCartesian(cx, cy, r, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? "0" : "1";
+  return [
+    `M ${cx} ${cy}`,
+    `L ${start.x} ${start.y}`,
+    `A ${r} ${r} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`,
+    "Z",
+  ].join(" ");
+}
+
 function buildDmThreadKey(uidA, uidB) {
   return [String(uidA || ""), String(uidB || "")].sort().join("__");
 }
@@ -133,6 +162,12 @@ export default function App() {
   const [viewMode, setViewMode] = useState("room");
   const [statusNotice, setStatusNotice] = useState("");
 
+  const [wheelOpen, setWheelOpen] = useState(false);
+  const [wheelSpinning, setWheelSpinning] = useState(false);
+  const [wheelRotation, setWheelRotation] = useState(0);
+  const [wheelWinner, setWheelWinner] = useState(null);
+  const wheelTimerRef = useRef(null);
+
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [bannedUsers, setBannedUsers] = useState(() => {
     if (typeof window === "undefined") return {};
@@ -177,6 +212,12 @@ export default function App() {
   const typingFdName = isReservedFdName(nickname);
   const isFdAdmin = entered && isReservedFdName(nickname) && isFdAuthenticated;
   const isMyBanned = Boolean(bannedUsers && bannedUsers[myId]);
+
+  useEffect(() => {
+    return () => {
+      if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -255,6 +296,7 @@ export default function App() {
       remove(ref(dbRef.current, `${DB_ROOT}/users/${myId}`));
     }
     setDmPeer(null);
+    setWheelOpen(false);
     setEntered(false);
     setLoginError("Yönetici (FD) tarafından sistemden uzaklaştırıldınız.");
   }, [isMyBanned, isFdAdmin, myId]);
@@ -429,17 +471,60 @@ export default function App() {
       remove(ref(dbRef.current, `${DB_ROOT}/users/${myId}`));
     }
     setDmPeer(null);
+    setWheelOpen(false);
     setEntered(false);
   }
 
+  function spinWheelWithCandidates(candidates) {
+    if (!candidates || candidates.length === 0 || wheelSpinning) return;
+    if (wheelTimerRef.current) clearTimeout(wheelTimerRef.current);
+
+    setWheelWinner(null);
+    setWheelSpinning(true);
+
+    const sliceDeg = 360 / candidates.length;
+    const winIdx = Math.floor(Math.random() * candidates.length);
+    const chosen = candidates[winIdx];
+
+    const sliceCenterDeg = winIdx * sliceDeg + sliceDeg / 2;
+    const targetMod = (360 - (sliceCenterDeg % 360) + 360) % 360;
+    const currentMod = ((wheelRotation % 360) + 360) % 360;
+    const deltaToTarget = (targetMod - currentMod + 360) % 360;
+    const fullSpins = 5 * 360;
+    const nextRotation = wheelRotation + fullSpins + deltaToTarget;
+
+    setWheelRotation(nextRotation);
+
+    wheelTimerRef.current = setTimeout(() => {
+      setWheelSpinning(false);
+      setWheelWinner(chosen);
+      setStatusNotice(`${chosen.name} ile eşleşildi.`);
+    }, 3400);
+  }
+
   function handleQuickMatch() {
+    if (!entered) {
+      const trimmed = nickname.trim();
+      if (!trimmed) {
+        setLoginError("Lütfen bir takma ad gir.");
+        return;
+      }
+      if (isReservedFdName(trimmed) && !isFdAuthenticated) {
+        handleEnter();
+        return;
+      }
+      setEntered(true);
+    }
+
     if (otherRealUsers.length === 0) {
-      setStatusNotice("Şu an eşleşebileceğin başka çevrimiçi kişi yok.");
+      setWheelWinner(null);
+      setWheelOpen(true);
+      setStatusNotice("Şu an çevrimiçi başka kullanıcı yok.");
       return;
     }
-    const picked = otherRealUsers[Math.floor(Math.random() * otherRealUsers.length)];
-    setDmPeer(picked);
-    setStatusNotice(`${picked.name} ile özel sohbet açıldı.`);
+
+    setWheelOpen(true);
+    spinWheelWithCandidates(otherRealUsers);
   }
 
   function handleSendRoomMessage(e) {
@@ -579,7 +664,136 @@ export default function App() {
     } else {
       setDmMessages((prev) => [...prev.slice(-99), msg]);
     }
+  }  function renderWheelModal() {
+    if (!wheelOpen) return null;
+    const count = otherRealUsers.length;
+    const sliceDeg = count > 0 ? 360 / count : 360;
+
+    return (
+      <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="bg-[#f5f5f0] border border-[#e2e4dc] rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl text-[#1c2420]">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-black text-[#18201c]">Rastgele Eşleşme Çarkı</h3>
+            <button
+              type="button"
+              disabled={wheelSpinning}
+              onClick={() => {
+                setWheelOpen(false);
+                setWheelWinner(null);
+              }}
+              className="p-1.5 rounded-xl bg-white border border-[#e2e4dc] text-[#4a5a51] disabled:opacity-40"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {count === 0 ? (
+            <div className="bg-white border border-[#e2e4dc] rounded-2xl p-6 text-center space-y-2">
+              <p className="text-xs font-bold text-[#18201c]">
+                Çarkta gösterilecek başka çevrimiçi kişi yok.
+              </p>
+              <p className="text-[11px] text-[#6d7a72]">
+                Başka bir tarayıcı veya cihazdan giriş yapıldığında isimler çarkta görünür.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="relative w-64 h-64 mx-auto flex items-center justify-center">
+                <div
+                  className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10 w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[18px] border-t-[#18201c]"
+                />
+
+                <div
+                  className="w-full h-full rounded-full overflow-hidden border-4 border-white shadow-lg"
+                  style={{
+                    transform: `rotate(${wheelRotation}deg)`,
+                    transition: wheelSpinning
+                      ? "transform 3.4s cubic-bezier(0.14, 0.85, 0.22, 1)"
+                      : "none",
+                  }}
+                >
+                  <svg viewBox="0 0 240 240" className="w-full h-full">
+                    {otherRealUsers.map((u, idx) => {
+                      const startDeg = idx * sliceDeg;
+                      const endDeg = (idx + 1) * sliceDeg;
+                      const midDeg = startDeg + sliceDeg / 2;
+                      const labelPos = polarToCartesian(120, 120, 74, midDeg);
+                      const shortName = String(u.name || "Üye").slice(0, 11);
+                      return (
+                        <g key={u.id}>
+                          <path
+                            d={buildSlicePath(120, 120, 116, startDeg, endDeg)}
+                            fill={WHEEL_COLORS[idx % WHEEL_COLORS.length]}
+                            stroke="#f5f5f0"
+                            strokeWidth="1.5"
+                          />
+                          <text
+                            x={labelPos.x}
+                            y={labelPos.y}
+                            fill="#ffffff"
+                            fontSize={count > 8 ? "8" : "10"}
+                            fontWeight="700"
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            transform={`rotate(${midDeg - 90}, ${labelPos.x}, ${labelPos.y})`}
+                          >
+                            {shortName}
+                          </text>
+                        </g>
+                      );
+                    })}
+                    <circle cx="120" cy="120" r="18" fill="#ffffff" stroke="#2d4939" strokeWidth="3" />
+                  </svg>
+                </div>
+              </div>
+
+              <div className="text-center min-h-11 flex flex-col items-center justify-center">
+                {wheelSpinning ? (
+                  <p className="text-xs font-bold text-[#2d4939]">Çark dönüyor, kişi seçiliyor...</p>
+                ) : wheelWinner ? (
+                  <div className="space-y-2 w-full">
+                    <p className="text-xs font-extrabold text-[#18201c]">
+                      Eşleşme: <span className="text-[#2d4939]">{wheelWinner.name}</span>
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => spinWheelWithCandidates(otherRealUsers)}
+                        className="py-2.5 rounded-xl bg-white border border-[#dce0d8] text-xs font-bold text-[#1c2420]"
+                      >
+                        Tekrar Çevir
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = wheelWinner;
+                          setWheelOpen(false);
+                          setWheelWinner(null);
+                          setDmPeer(target);
+                        }}
+                        className="py-2.5 rounded-xl bg-[#2d4939] text-white text-xs font-bold"
+                      >
+                        Sohbete Başla →
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => spinWheelWithCandidates(otherRealUsers)}
+                    className="w-full py-2.5 rounded-xl bg-[#2d4939] text-white text-xs font-bold"
+                  >
+                    Çarkı Çevir
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
   }
+
   if (!entered) {
     const needsFirstTimeFdSetup = typingFdName && (!storedFdAuth || !storedFdAuth.passwordHash);
 
@@ -673,7 +887,7 @@ export default function App() {
 
           <button
             type="button"
-            onClick={handleEnter}
+            onClick={handleQuickMatch}
             disabled={!nickname.trim()}
             className="w-full py-4 rounded-2xl bg-[#2d4939] hover:bg-[#243c2e] disabled:opacity-40 text-white font-bold text-base flex items-center justify-center gap-2 shadow-sm transition"
           >
@@ -741,6 +955,8 @@ export default function App() {
         <footer className="max-w-md w-full mx-auto text-center text-[11px] text-[#78847d]">
           Yanimda • Gerçek çevrimiçi topluluk
         </footer>
+
+        {renderWheelModal()}
       </div>
     );
   }
@@ -1075,6 +1291,8 @@ export default function App() {
         </div>
       </div>
 
+      {renderWheelModal()}
+
       {reportTargetUser && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <form
@@ -1180,3 +1398,4 @@ export default function App() {
     </div>
   );
 }
+
