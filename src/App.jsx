@@ -27,6 +27,7 @@ import {
   Newspaper,
   Coffee,
   Gamepad2,
+  Bot,
 } from "lucide-react";
 
 const FIREBASE_CONFIG =
@@ -43,6 +44,15 @@ const SIMPLE_ROOMS = [
   { id: "gundem", title: "Gündem", icon: "newspaper", badge: "Canlı" },
   { id: "sohbet", title: "Sohbet", icon: "coffee", badge: "Serbest" },
   { id: "oyun", title: "Oyun", icon: "gamepad", badge: "Eğlence" },
+];
+
+const BOT_PROFILES = [
+  { id: "bot_efe", name: "Efe", room: "futbol", isBot: true },
+  { id: "bot_defne", name: "Defne", room: "sohbet", isBot: true },
+  { id: "bot_aras", name: "Aras", room: "gundem", isBot: true },
+  { id: "bot_zeynep", name: "Zeynep", room: "oyun", isBot: true },
+  { id: "bot_mert", name: "Mert", room: "siyaset", isBot: true },
+  { id: "bot_ela", name: "Ela", room: "sohbet", isBot: true },
 ];
 
 const RANDOM_NICKS = [
@@ -162,6 +172,11 @@ export default function App() {
   const [viewMode, setViewMode] = useState("room");
   const [statusNotice, setStatusNotice] = useState("");
 
+  const [botsEnabled, setBotsEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(`${STORAGE_PREFIX}bots_enabled`) === "1";
+  });
+
   const [wheelOpen, setWheelOpen] = useState(false);
   const [wheelSpinning, setWheelSpinning] = useState(false);
   const [wheelRotation, setWheelRotation] = useState(0);
@@ -228,6 +243,11 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    window.localStorage.setItem(`${STORAGE_PREFIX}bots_enabled`, botsEnabled ? "1" : "0");
+  }, [botsEnabled]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     window.localStorage.setItem(`${STORAGE_PREFIX}chat`, JSON.stringify(chatMessages.slice(-150)));
   }, [chatMessages]);
 
@@ -253,6 +273,15 @@ export default function App() {
 
   useEffect(() => {
     if (!dbRef.current) return;
+
+    const unsubBots = onValue(ref(dbRef.current, `${DB_ROOT}/bot_config/enabled`), (snap) => {
+      const val = Boolean(snap.val());
+      setBotsEnabled(val);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(`${STORAGE_PREFIX}bots_enabled`, val ? "1" : "0");
+      }
+    });
+
     const unsubFdAuth = onValue(ref(dbRef.current, `${DB_ROOT}/admin_config/fd`), (snap) => {
       const val = snap.val();
       if (val && val.passwordHash) {
@@ -284,6 +313,7 @@ export default function App() {
     });
 
     return () => {
+      unsubBots();
       unsubFdAuth();
       unsubBans();
       unsubReports();
@@ -319,7 +349,7 @@ export default function App() {
 
       const unsubUsers = onValue(ref(dbRef.current, `${DB_ROOT}/users`), (snap) => {
         const val = snap.val() || {};
-        setOnlineUsers(Object.values(val).filter((u) => u && u.id));
+        setOnlineUsers(Object.values(val).filter((u) => u && u.id && !u.isBot));
       });
 
       const unsubChat = onValue(ref(dbRef.current, `${DB_ROOT}/chat`), (snap) => {
@@ -343,6 +373,10 @@ export default function App() {
 
   useEffect(() => {
     if (!entered || !dmPeer || !dmPeer.id) {
+      setDmMessages([]);
+      return;
+    }
+    if (dmPeer.isBot) {
       setDmMessages([]);
       return;
     }
@@ -370,10 +404,10 @@ export default function App() {
     }
   }, [dmMessages, dmPeer]);
 
-  const activeRealUsers = useMemo(() => {
+  const activeDirectoryUsers = useMemo(() => {
     const map = new Map();
     onlineUsers.forEach((u) => {
-      if (u && u.id && !bannedUsers[u.id]) {
+      if (u && u.id && !u.isBot && !bannedUsers[u.id]) {
         map.set(u.id, u);
       }
     });
@@ -385,14 +419,21 @@ export default function App() {
         isAdmin: isFdAdmin,
       });
     }
+    if (botsEnabled) {
+      BOT_PROFILES.forEach((bot) => {
+        if (!bannedUsers[bot.id]) {
+          map.set(bot.id, { ...bot, online: true });
+        }
+      });
+    }
     return Array.from(map.values());
-  }, [onlineUsers, bannedUsers, entered, isMyBanned, myId, isFdAdmin, nickname, activeRoom]);
+  }, [onlineUsers, bannedUsers, entered, isMyBanned, myId, isFdAdmin, nickname, activeRoom, botsEnabled]);
 
-  const otherRealUsers = useMemo(() => {
-    return activeRealUsers.filter((u) => u.id !== myId);
-  }, [activeRealUsers, myId]);
+  const otherAvailableUsers = useMemo(() => {
+    return activeDirectoryUsers.filter((u) => u.id !== myId);
+  }, [activeDirectoryUsers, myId]);
 
-  const realOnlineCount = activeRealUsers.length;
+  const onlineCount = activeDirectoryUsers.length;
 
   const currentRoomObj = useMemo(
     () => SIMPLE_ROOMS.find((r) => r.id === activeRoom) || SIMPLE_ROOMS[0],
@@ -403,6 +444,34 @@ export default function App() {
     return chatMessages.filter((m) => (m.room || "futbol") === activeRoom);
   }, [chatMessages, activeRoom]);
 
+  function handleToggleBots() {
+    if (!isFdAdmin) return;
+    const nextState = !botsEnabled;
+    setBotsEnabled(nextState);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(`${STORAGE_PREFIX}bots_enabled`, nextState ? "1" : "0");
+    }
+    if (dbRef.current) {
+      set(ref(dbRef.current, `${DB_ROOT}/bot_config/enabled`), nextState);
+      BOT_PROFILES.forEach((bot) => {
+        const botRef = ref(dbRef.current, `${DB_ROOT}/users/${bot.id}`);
+        if (nextState) {
+          set(botRef, {
+            id: bot.id,
+            name: bot.name,
+            room: bot.room,
+            isBot: true,
+            updatedAt: Date.now(),
+          });
+        } else {
+          remove(botRef);
+        }
+      });
+    }
+    setStatusNotice(
+      nextState ? "6 bot kullanıcı çevrimiçi yapıldı." : "6 bot kullanıcı çevrimdışı yapıldı."
+    );
+  }
   function handleRandomNick() {
     if (isReservedFdName(nickname)) return;
     const candidates = RANDOM_NICKS.filter((n) => n !== nickname.trim());
@@ -516,7 +585,7 @@ export default function App() {
       setEntered(true);
     }
 
-    if (otherRealUsers.length === 0) {
+    if (otherAvailableUsers.length === 0) {
       setWheelWinner(null);
       setWheelOpen(true);
       setStatusNotice("Şu an çevrimiçi başka kullanıcı yok.");
@@ -524,7 +593,7 @@ export default function App() {
     }
 
     setWheelOpen(true);
-    spinWheelWithCandidates(otherRealUsers);
+    spinWheelWithCandidates(otherAvailableUsers);
   }
 
   function handleSendRoomMessage(e) {
@@ -659,14 +728,20 @@ export default function App() {
       text: clean,
       ts: Date.now(),
     };
+    if (dmPeer.isBot) {
+      setDmMessages((prev) => [...prev.slice(-99), msg]);
+      return;
+    }
     if (dbRef.current) {
       push(ref(dbRef.current, `${DB_ROOT}/dms/${buildDmThreadKey(myId, dmPeer.id)}`), msg);
     } else {
       setDmMessages((prev) => [...prev.slice(-99), msg]);
     }
-  }  function renderWheelModal() {
+  }
+
+  function renderWheelModal() {
     if (!wheelOpen) return null;
-    const count = otherRealUsers.length;
+    const count = otherAvailableUsers.length;
     const sliceDeg = count > 0 ? 360 / count : 360;
 
     return (
@@ -693,15 +768,13 @@ export default function App() {
                 Çarkta gösterilecek başka çevrimiçi kişi yok.
               </p>
               <p className="text-[11px] text-[#6d7a72]">
-                Başka bir tarayıcı veya cihazdan giriş yapıldığında isimler çarkta görünür.
+                Başka bir kişi girdiğinde veya FD panelinden 6 botu aktif ettiğinde isimler çarkta görünür.
               </p>
             </div>
           ) : (
             <>
               <div className="relative w-64 h-64 mx-auto flex items-center justify-center">
-                <div
-                  className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10 w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[18px] border-t-[#18201c]"
-                />
+                <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10 w-0 h-0 border-l-[10px] border-l-transparent border-r-[10px] border-r-transparent border-t-[18px] border-t-[#18201c]" />
 
                 <div
                   className="w-full h-full rounded-full overflow-hidden border-4 border-white shadow-lg"
@@ -713,7 +786,7 @@ export default function App() {
                   }}
                 >
                   <svg viewBox="0 0 240 240" className="w-full h-full">
-                    {otherRealUsers.map((u, idx) => {
+                    {otherAvailableUsers.map((u, idx) => {
                       const startDeg = idx * sliceDeg;
                       const endDeg = (idx + 1) * sliceDeg;
                       const midDeg = startDeg + sliceDeg / 2;
@@ -758,7 +831,7 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        onClick={() => spinWheelWithCandidates(otherRealUsers)}
+                        onClick={() => spinWheelWithCandidates(otherAvailableUsers)}
                         className="py-2.5 rounded-xl bg-white border border-[#dce0d8] text-xs font-bold text-[#1c2420]"
                       >
                         Tekrar Çevir
@@ -780,7 +853,7 @@ export default function App() {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => spinWheelWithCandidates(otherRealUsers)}
+                    onClick={() => spinWheelWithCandidates(otherAvailableUsers)}
                     className="w-full py-2.5 rounded-xl bg-[#2d4939] text-white text-xs font-bold"
                   >
                     Çarkı Çevir
@@ -806,7 +879,7 @@ export default function App() {
           </div>
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-[#e2e4dc] text-xs font-semibold text-[#3a4940]">
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            {realOnlineCount} çevrimiçi
+            {onlineCount} çevrimiçi
           </span>
         </header>
 
@@ -953,7 +1026,7 @@ export default function App() {
         </main>
 
         <footer className="max-w-md w-full mx-auto text-center text-[11px] text-[#78847d]">
-          Yanimda • Gerçek çevrimiçi topluluk
+          Yanimda • Gerçek zamanlı topluluk
         </footer>
 
         {renderWheelModal()}
@@ -981,7 +1054,7 @@ export default function App() {
           <div className="flex items-center gap-2 shrink-0">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-[#e2e4dc] text-xs font-semibold text-[#3a4940]">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              {realOnlineCount} çevrimiçi
+              {onlineCount} çevrimiçi
             </span>
             <button
               type="button"
@@ -1009,9 +1082,23 @@ export default function App() {
 
         {isFdAdmin && (
           <section className="bg-white border border-amber-300 rounded-2xl p-3.5 space-y-2.5 shadow-sm">
-            <div className="text-xs font-extrabold text-amber-900 flex items-center gap-1.5">
-              <Shield className="w-4 h-4" />
-              FD Yönetim ({reportsList.length} Şikayet)
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-xs font-extrabold text-amber-900 flex items-center gap-1.5">
+                <Shield className="w-4 h-4" />
+                FD Yönetim ({reportsList.length} Şikayet)
+              </div>
+              <button
+                type="button"
+                onClick={handleToggleBots}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold flex items-center gap-1.5 border transition ${
+                  botsEnabled
+                    ? "bg-[#2d4939] text-white border-[#2d4939]"
+                    : "bg-[#f5f5f0] text-[#1c2420] border-[#dce0d8]"
+                }`}
+              >
+                <Bot className="w-3.5 h-3.5" />
+                <span>6 Bot: {botsEnabled ? "Aktif" : "Pasif"}</span>
+              </button>
             </div>
             {reportsList.length === 0 ? (
               <p className="text-xs text-[#6d7a72]">Aktif şikayet yok.</p>
@@ -1105,7 +1192,7 @@ export default function App() {
             }`}
           >
             <Users className="w-4 h-4" />
-            <span>Kişiler ({otherRealUsers.length})</span>
+            <span>Kişiler ({otherAvailableUsers.length})</span>
           </button>
           <button
             type="button"
@@ -1123,12 +1210,12 @@ export default function App() {
 
         {viewMode === "people" ? (
           <div className="bg-white border border-[#e2e4dc] rounded-2xl p-3.5 space-y-2.5 shadow-sm">
-            {otherRealUsers.length === 0 ? (
+            {otherAvailableUsers.length === 0 ? (
               <p className="text-xs text-[#6d7a72] text-center py-8">
-                Şu an aktif başka kişi yok. Başka bir giriş yaptığında burada görünür.
+                Şu an aktif başka kişi yok. FD girişinden 6 botu aktif edebilir veya başka giriş bekleyebilirsin.
               </p>
             ) : (
-              otherRealUsers.map((u) => (
+              otherAvailableUsers.map((u) => (
                 <div
                   key={u.id}
                   className="flex items-center justify-between gap-2 bg-[#f8f8f4] border border-[#e7e9e2] rounded-xl px-3 py-2.5"
@@ -1398,4 +1485,3 @@ export default function App() {
     </div>
   );
 }
-
