@@ -23,6 +23,7 @@ import {
   Flag,
   ChevronRight,
   Sparkles,
+  Bell,
 } from "lucide-react";
 
 const FIREBASE_CONFIG =
@@ -33,14 +34,7 @@ const FIREBASE_CONFIG =
 const STORAGE_PREFIX = "yanimda_helal_";
 const DB_ROOT = "yanimda";
 
-const AGE_RANGES = [
-  "18–22",
-  "23–27",
-  "28–34",
-  "35–44",
-  "45+",
-];
-
+const AGE_RANGES = ["18–22", "23–27", "28–34", "35–44", "45+"];
 const GENDERS = ["Kadın", "Erkek"];
 
 function buildDmThreadKey(uidA, uidB) {
@@ -125,7 +119,9 @@ export default function App() {
 
   const [loginError, setLoginError] = useState("");
   const [statusNotice, setStatusNotice] = useState("");
-  const [activeTab, setActiveTab] = useState("discover"); // discover | matches
+  const [messageAlert, setMessageAlert] = useState(null); // { peer, text }
+  const [unreadByPeer, setUnreadByPeer] = useState({});
+  const [activeTab, setActiveTab] = useState("discover");
 
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [skippedIds, setSkippedIds] = useState([]);
@@ -170,6 +166,8 @@ export default function App() {
 
   const dbRef = useRef(null);
   const dmBottomRef = useRef(null);
+  const seenDmIdsRef = useRef(new Set());
+  const initialThreadLoadedRef = useRef(new Set());
 
   const typingFdName = isReservedFdName(nickname);
   const isFdAdmin = entered && isReservedFdName(nickname) && isFdAuthenticated;
@@ -360,6 +358,74 @@ export default function App() {
     });
   }, [activeUsersMap, myId, likedIds, incomingLikes]);
 
+  const totalUnread = useMemo(
+    () => Object.values(unreadByPeer).reduce((acc, n) => acc + (Number(n) || 0), 0),
+    [unreadByPeer]
+  );
+
+  // Sohbet penceresi kapalıyken gelen yeni DM mesajlarını anında yakala ve bildir
+  useEffect(() => {
+    if (!entered || !dbRef.current || mutualMatches.length === 0) return;
+
+    const unsubs = mutualMatches.map((peer) => {
+      const threadKey = buildDmThreadKey(myId, peer.id);
+      const threadRef = ref(dbRef.current, `${DB_ROOT}/dms/${threadKey}`);
+
+      return onValue(threadRef, (snap) => {
+        const val = snap.val() || {};
+        const entries = Object.entries(val)
+          .map(([fbKey, item]) => ({ id: item?.id || fbKey, fbKey, ...item }))
+          .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+
+        const isFirstSnapshot = !initialThreadLoadedRef.current.has(threadKey);
+        if (isFirstSnapshot) {
+          initialThreadLoadedRef.current.add(threadKey);
+          entries.forEach((m) => {
+            const uniqueKey = m.fbKey || m.id;
+            if (uniqueKey) seenDmIdsRef.current.add(uniqueKey);
+          });
+          return;
+        }
+
+        entries.forEach((m) => {
+          const uniqueKey = m.fbKey || m.id;
+          if (!uniqueKey || seenDmIdsRef.current.has(uniqueKey)) return;
+          seenDmIdsRef.current.add(uniqueKey);
+
+          const isFromPeer = m.senderId && m.senderId !== myId;
+          const isChatOpenWithPeer = dmPeer && dmPeer.id === peer.id;
+
+          if (isFromPeer && !isChatOpenWithPeer) {
+            setUnreadByPeer((prev) => ({
+              ...prev,
+              [peer.id]: (prev[peer.id] || 0) + 1,
+            }));
+            setMessageAlert({
+              peer,
+              text: m.text || "Yeni mesaj geldi",
+            });
+          }
+        });
+      });
+    });
+
+    return () => {
+      unsubs.forEach((fn) => fn && fn());
+    };
+  }, [entered, mutualMatches, myId, dmPeer]);
+
+  function openDmWithUser(targetUser) {
+    if (!targetUser) return;
+    setUnreadByPeer((prev) => {
+      const next = { ...prev };
+      delete next[targetUser.id];
+      return next;
+    });
+    if (messageAlert && messageAlert.peer && messageAlert.peer.id === targetUser.id) {
+      setMessageAlert(null);
+    }
+    setDmPeer(targetUser);
+  }
   function handleEnter(e) {
     if (e) e.preventDefault();
     const trimmedNick = nickname.trim();
@@ -442,6 +508,7 @@ export default function App() {
     }
     setDmPeer(null);
     setMatchedUser(null);
+    setMessageAlert(null);
     setEntered(false);
   }
 
@@ -469,6 +536,7 @@ export default function App() {
       setStatusNotice(`${target.name} beğenildi.`);
     }
   }
+
   function handleDismissReport(rep) {
     if (!rep) return;
     const next = reportsList.filter((x) => x.id !== rep.id && x.fbKey !== rep.fbKey);
@@ -769,6 +837,28 @@ export default function App() {
           </div>
         </div>
 
+        {messageAlert && (
+          <div className="bg-[#2d4939] text-white rounded-2xl px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs shadow-md">
+            <button
+              type="button"
+              onClick={() => openDmWithUser(messageAlert.peer)}
+              className="flex items-center gap-2 text-left min-w-0 flex-1"
+            >
+              <Bell className="w-4 h-4 text-amber-300 shrink-0" />
+              <span className="truncate">
+                <strong>{messageAlert.peer.name}</strong>: &ldquo;{messageAlert.text}&rdquo; — Mesaj geldi (Aç)
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMessageAlert(null)}
+              className="text-white/80 hover:text-white shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
         {statusNotice && (
           <div className="bg-white border border-[#dce0d8] rounded-2xl px-3.5 py-2 flex items-center justify-between text-xs text-[#28352e] shadow-sm">
             <span>{statusNotice}</span>
@@ -872,6 +962,11 @@ export default function App() {
           >
             <MessageCircle className="w-4 h-4" />
             <span>Eşleşmeler ({mutualMatches.length})</span>
+            {totalUnread > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
+                {totalUnread}
+              </span>
+            )}
           </button>
         </div>
 
@@ -968,28 +1063,36 @@ export default function App() {
                 Henüz karşılıklı eşleşme yok. Kartlardan beğendiğin kişi de seni beğendiğinde burada görünür.
               </p>
             ) : (
-              mutualMatches.map((mUser) => (
-                <div
-                  key={mUser.id}
-                  className="flex items-center justify-between gap-2 bg-[#f8f8f4] border border-[#e7e9e2] rounded-xl px-3 py-2.5"
-                >
-                  <div className="min-w-0">
-                    <div className="text-xs font-extrabold text-[#18201c] truncate">
-                      {mUser.name}
-                    </div>
-                    <div className="text-[11px] text-[#6d7a72] truncate">
-                      {mUser.city} • {mUser.gender} • {mUser.ageRange}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setDmPeer(mUser)}
-                    className="px-3 py-1.5 rounded-xl bg-[#2d4939] text-white text-xs font-bold shrink-0"
+              mutualMatches.map((mUser) => {
+                const peerUnread = unreadByPeer[mUser.id] || 0;
+                return (
+                  <div
+                    key={mUser.id}
+                    className="flex items-center justify-between gap-2 bg-[#f8f8f4] border border-[#e7e9e2] rounded-xl px-3 py-2.5"
                   >
-                    Sohbet
-                  </button>
-                </div>
-              ))
+                    <div className="min-w-0">
+                      <div className="text-xs font-extrabold text-[#18201c] truncate">
+                        {mUser.name}
+                      </div>
+                      <div className="text-[11px] text-[#6d7a72] truncate">
+                        {mUser.city} • {mUser.gender} • {mUser.ageRange}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openDmWithUser(mUser)}
+                      className="px-3 py-1.5 rounded-xl bg-[#2d4939] text-white text-xs font-bold shrink-0 inline-flex items-center gap-1.5"
+                    >
+                      <span>Sohbet</span>
+                      {peerUnread > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black">
+                          {peerUnread}
+                        </span>
+                      )}
+                    </button>
+                  </div>
+                );
+              })
             )}
           </div>
         )}
@@ -1019,7 +1122,7 @@ export default function App() {
                 onClick={() => {
                   const target = matchedUser;
                   setMatchedUser(null);
-                  setDmPeer(target);
+                  openDmWithUser(target);
                 }}
                 className="py-2.5 rounded-xl bg-[#2d4939] text-white text-xs font-bold"
               >
